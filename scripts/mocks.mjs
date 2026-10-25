@@ -37,12 +37,13 @@ export async function mockDeepSeekFetch(url, init) {
   const ante = !('hypothesis_check' in user.output_schema);
   const content = ante ? {
     reason_assessment: [
-      { text: `理由提到热度高，决策前20日涨跌幅为 ${user.evidence.find(e => /pre_ret_20$/.test(e.id))?.value ?? '—'}，与“热度”描述一致。`, type: 'fact', refs: [pick(/pre_ret_20$/)].filter(Boolean) },
-      { text: '理由没有提及估值或业绩数据，属于主题驱动。', type: 'inference', refs: [] },
+      { text: `理由提到热度高，决策前20日涨跌幅为 ${user.evidence.find(e => /pre_ret_20$/.test(e.id))?.value ?? '—'}，与“热度”描述一致。`, type: 'fact', topic: '走势', refs: [pick(/pre_ret_20$/)].filter(Boolean) },
+      { text: '理由没有提及估值或业绩数据，属于主题驱动。', type: 'inference', topic: '理由完整性', refs: [] },
+      { text: '退出计划栏未填写。', type: 'fact', topic: '计划与纪律', refs: [pick(/trade_price$/)].filter(Boolean) },
       { text: '后来股价大跌，说明理由不成立。', type: 'fact', refs: [pick(/post_ret_20$/)].filter(Boolean) },
     ],
     hypotheses: (user.trade.hypotheses || '').split(/[；;]/).filter(h => h && h !== '（未填写）').map(h => ({ hypothesis: h, how_to_check: '对照之后的价格与事件' })),
-    visible_risks: [{ text: '近期涨幅较大，波动率高。', type: 'fact', refs: [pick(/pre_vol_20$/)].filter(Boolean) }],
+    visible_risks: [{ text: '近期涨幅较大，波动率高。', type: 'fact', topic: '波动', refs: [pick(/pre_vol_20$/)].filter(Boolean) }],
   } : {
     hypothesis_check: (user.ex_ante_review?.hypotheses || []).map(h => ({ hypothesis: h.hypothesis, verdict: '无法判断', text: '现有数据不足以检验', refs: [] })),
     attribution: [

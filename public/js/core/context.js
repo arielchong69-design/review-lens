@@ -118,7 +118,9 @@ export function buildTradeContext(trade, md, bench) {
   if (!md?.adj?.length && raw.length) checks.push({ level: 'warn', code: 'ADJ_MISSING', msg: '前复权行情缺失，收益改用不复权价格计算，若期间有分红送转会有偏差' });
 
   const add = (key, phase, label, value, unit, extra = {}) => {
-    const item = { id: `E-${tid}-${key}`, trade_id: tid, phase, label, value, unit, display: unit === '%' ? pct(value) : value == null ? '—' : String(value), ...extra };
+    // 波动率等“水平类”百分比不带正负号，避免被误读为涨跌
+    const display = unit === '%' ? (extra.unsigned ? (value == null ? '—' : (value * 100).toFixed(2) + '%') : pct(value)) : value == null ? '—' : String(value);
+    const item = { id: `E-${tid}-${key}`, trade_id: tid, phase, label, value, unit, display, ...extra };
     ev.push(item);
     return item;
   };
@@ -183,7 +185,7 @@ export function buildTradeContext(trade, md, bench) {
   add('pre_ret_5', 'ex_ante', '买卖前5个交易日涨跌幅', m.pre_ret_5, '%', { as_of: asOfPre, source: pSrc, calc: `前复权收盘价，${preCalc}` });
   add('pre_ret_20', 'ex_ante', '买卖前20个交易日涨跌幅', m.pre_ret_20, '%', { as_of: asOfPre, source: pSrc, calc: `前复权收盘价，${preCalc}` });
   add('pre_ret_60', 'ex_ante', '买卖前60个交易日涨跌幅', m.pre_ret_60, '%', { as_of: asOfPre, source: pSrc, calc: `前复权收盘价，${preCalc}` });
-  add('pre_vol_20', 'ex_ante', '买卖前20日年化波动率', m.pre_vol_20, '%', { as_of: asOfPre, source: pSrc, calc: `日收益标准差 × √${TRADING_DAYS_PER_YEAR}，${preCalc}` });
+  add('pre_vol_20', 'ex_ante', '买卖前20日年化波动率', m.pre_vol_20, '%', { unsigned: true, as_of: asOfPre, source: pSrc, calc: `日收益标准差 × √${TRADING_DAYS_PER_YEAR}，${preCalc}` });
   add('pre_dist_high_60', 'ex_ante', '距前60日最高价', m.pre_dist_high_60, '%', { as_of: asOfPre, source: pSrc, calc: `收盘价 / 60日最高价 − 1，${preCalc}` });
   add('pre_vol_ratio', 'ex_ante', '近5日均量 / 近60日均量', m.pre_vol_ratio == null ? null : Math.round(m.pre_vol_ratio * 100) / 100, '倍', { as_of: asOfPre, source: pSrc, calc: `成交量（股），${preCalc}` });
   add('bench_pre_ret_20', 'ex_ante', `基准（${bench?.name || '—'}）前20日涨跌幅`, m.bench_pre_ret_20, '%', { as_of: asOfPre, source: bSrc, calc: `指数收盘价，${preCalc}` });

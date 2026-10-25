@@ -34,7 +34,8 @@ export function tradeBiases(ctx) {
     const c3 = m.day_ret != null && m.day_ret >= THRESHOLDS.chase_day_ret;
     const hits = [c1 && `买前20日已涨 ${pct(m.pre_ret_20)}`, c2 && '贴近60日高点且放量', c3 && `买入当天大涨（收盘 ${pct(m.day_ret)}）`].filter(Boolean);
     out.push({
-      id: 'chase', name: '追涨买入', trade_id: t.id, phase: 'ex_ante',
+      // 只由“当日大涨”触发时，依据的是收盘数据（当日部分可知），规则结果的时序随之标为当日
+      id: 'chase', name: '追涨买入', trade_id: t.id, phase: c3 && !c1 && !c2 ? 'same_day' : 'ex_ante',
       status: !hasData ? 'insufficient' : hits.length ? 'triggered' : 'clear',
       rule: `满足任一：买前20日涨幅 ≥ ${pct(THRESHOLDS.chase_ret20)}；距60日高点 ≤ 3% 且近5日量能 ≥ 60日均量 ${THRESHOLDS.chase_vol_ratio} 倍；买入当日涨幅 ≥ ${pct(THRESHOLDS.chase_day_ret)}`,
       evidence: [evRef(ctx, 'pre_ret_20'), evRef(ctx, 'pre_dist_high_60'), evRef(ctx, 'pre_vol_ratio'), evRef(ctx, 'day_ret')],

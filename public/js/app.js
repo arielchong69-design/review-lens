@@ -4,7 +4,8 @@ import { normalizeTrade, parseTradesCSV, toCSV, CSV_HEADERS, sortTrades, THSCODE
 import { analyze, buildPack } from './core/engine.js';
 import { pct, currentMetrics } from './core/context.js';
 import { STATUS_LABEL } from './core/biases.js';
-import { ruleBasedReview, DISCLAIMER } from './core/review.js';
+import { ruleBasedReview, validateAIOutput, DISCLAIMER } from './core/review.js';
+import { SUPPORT_LABEL, SUPPORT_NOTE, evidenceKinds, TIMING_LABEL, evidenceTiming } from './core/relevance.js';
 import { lessonsToChecklist, mergeChecklist, evaluateChecklist, similarHistory } from './core/checklist.js';
 import { addDays, todayShanghai } from './core/dates.js';
 import { state as ds, resetLog, loadMarketForTrades, callReview, health, searchTicker, fetchBars, fetchIndexBars, fetchEvents, BENCHMARK, exportSnapshot } from './datasource.js';
@@ -142,10 +143,11 @@ function renderCutoff(ctx) {
   $('#checks').innerHTML = ctx.checks.map(c => `<div class="msg ${lv[c.level]}">${c.level === 'error' ? '数据冲突/缺失：' : c.level === 'warn' ? '注意：' : ''}${h(c.msg)}</div>`).join('');
   const col = (phase, title, sub) => {
     const evs = ctx.evidence.filter(e => e.phase === phase);
-    const nums = evs.filter(e => e.unit !== 'text'), texts = evs.filter(e => e.unit === 'text');
+    const nums = evs.filter(e => e.unit !== 'text'), texts = evs.filter(e => e.unit === 'text' && evidenceKinds(e).includes('event')), recs = evs.filter(e => evidenceKinds(e).includes('plan'));
     return `<div class="phase ${phase === 'ex_ante' ? 'ante' : phase === 'same_day' ? 'same' : 'post'}"><h3>${title}</h3><div class="small muted" style="margin-bottom:6px">${sub}</div>
-      ${nums.map(e => `<div class="ev-row" data-ev="${e.id}"><span>${h(e.label)}</span><span class="v ${e.unit === '%' ? cls(e.value) : ''}">${h(e.display)}${e.unit !== '%' && e.unit !== 'text' && e.value != null ? ' ' + e.unit : ''}</span></div>`).join('')}
+      ${nums.map(e => `<div class="ev-row" data-ev="${e.id}"><span>${h(e.label)}</span><span class="v ${e.unit === '%' && !e.unsigned ? cls(e.value) : ''}">${h(e.display)}${e.unit !== '%' && e.unit !== 'text' && e.value != null ? ' ' + e.unit : ''}</span></div>`).join('')}
       ${texts.length ? `<div class="small" style="margin-top:6px;font-weight:600">事件</div>${texts.map(e => `<div class="ev-text" data-ev="${e.id}">${h(e.label)}：${h(e.display.slice(0, 70))}…</div>`).join('')}` : ''}
+      ${recs.length ? `<div class="small" style="margin-top:6px;font-weight:600">当时的记录</div>${recs.map(e => `<div class="ev-text" data-ev="${e.id}">${h(e.label.replace('用户记录：', ''))}：${h(e.display)}</div>`).join('')}` : ''}
       ${!evs.length ? '<div class="muted small">无</div>' : ''}</div>`;
   };
   $('#phaseCols').innerHTML = col('ex_ante', '事前可知', '决策前一交易日收盘及更早的信息') + col('same_day', '当日（部分可知）', '决策当天，盘中只能看到一部分') + col('ex_post', '事后才知道', '只能用来检验假设，不能用来苛责当时');
@@ -161,11 +163,13 @@ function showEvidence(id) {
     const phase = { ex_ante: '事前可知', same_day: '当日（部分可知）', ex_post: '事后信息' }[e.phase];
     const s = e.source || {};
     body.innerHTML = `<h2>${h(e.label)}</h2>
-      <div style="font-size:22px;font-weight:700;margin-top:6px" class="${e.unit === '%' ? cls(e.value) : ''}">${h(e.unit === 'text' ? '' : e.display)}${e.unit && !['%', 'text'].includes(e.unit) && e.value != null ? ' ' + e.unit : ''}</div>
+      <div style="font-size:22px;font-weight:700;margin-top:6px" class="${e.unit === '%' && !e.unsigned ? cls(e.value) : ''}">${h(e.unit === 'text' ? '' : e.display)}${e.unit && !['%', 'text'].includes(e.unit) && e.value != null ? ' ' + e.unit : ''}</div>
       ${e.unit === 'text' ? `<p>${h(e.value)}</p>` : ''}
       <dl class="kv">
         <dt>证据 ID</dt><dd>${h(e.id)}</dd>
         <dt>信息阶段</dt><dd>${phase}</dd>
+        <dt>证据类型</dt><dd>${h(evidenceKinds(e).join(' / '))}</dd>
+        <dt>时序</dt><dd>${h(TIMING_LABEL[evidenceTiming(e)] || '—')}</dd>${e.state ? `<dt>记录状态</dt><dd>${e.state === 'filled' ? '已填写' : '未填写'}</dd>` : ''}${e.status ? `<dt>规则结果</dt><dd>${h(e.status)}</dd>` : ''}
         <dt>数据时点</dt><dd>${h(e.as_of || '—')}</dd>
         <dt>单位</dt><dd>${h(e.unit === 'text' ? '文本' : e.unit || '—')}</dd>
         <dt>计算口径</dt><dd>${h(e.calc || '—')}</dd>
@@ -252,6 +256,17 @@ function refChips(refs = []) {
 function shortRef(r, e) { return e ? (e.label.length > 12 ? e.label.slice(0, 12) + '…' : e.label) : r; }
 function bindRefs(root) { root.querySelectorAll('[data-ref]').forEach(n => n.onclick = () => showEvidence(n.dataset.ref)); }
 const typeTag = t => (t === 'fact' ? '<span class="tag fact">事实</span>' : '<span class="tag inference">推断</span>');
+const supportTag = x => {
+  if (!x || !x.support) return '';
+  // 已改写为“（证据有限）/（无法判断）……”或假设已判“无法判断”的，不重复显示标签
+  if (typeof x.text === 'string' && /^（(证据有限|无法判断)）/.test(x.text)) return '';
+  if (x.verdict === '无法判断' && x.support === 'undetermined') return '';
+  const cls = x.support === 'pass' ? 'fact' : x.support === 'limited' ? 'inference' : 'unc';
+  const tip = [SUPPORT_NOTE, ...(x.support_notes || [])].join('\n');
+  return `<span class="tag ${cls}" title="${h(tip)}">${SUPPORT_LABEL[x.support]}</span>`;
+};
+const removedRefs = x => (x.irrelevant_refs?.length ? `<span class="small muted" title="${h(x.support_notes?.join('\n') || '')}">（已移除不相关引用 ${x.irrelevant_refs.length} 条）</span>` : '');
+const claimTail = x => `${refChips(x.refs)}${removedRefs(x)}${x.untraced ? '<span class="tag warn">数字未能溯源</span>' : ''}`;
 const genLabel = rv => (rv.generator === 'ai' ? `由 ${h(rv.model || 'AI')} 生成，已通过引用与合规校验` : `规则引擎生成（AI 不可用：${h(rv.ai_error || '未知')}）`);
 
 function renderExAnte(rv) {
@@ -259,9 +274,9 @@ function renderExAnte(rv) {
   const li = (arr, f) => (arr?.length ? `<ul>${arr.map(f).join('')}</ul>` : '<p class="muted small">无</p>');
   return `<section class="ante"><h3>A. 回到当时：只看事前信息 <span class="gen">${genLabel(rv.stage1 || rv)}</span></h3>
     <div class="small muted" style="margin-bottom:6px">这一步 AI 拿不到任何交易之后的数据，避免后见之明。</div>
-    <b class="small">理由与当时证据是否一致</b>${li(a.reason_assessment, x => `<li>${typeTag(x.type)}${h(x.text)} ${refChips(x.refs)}${x.untraced ? '<span class="tag warn">数字未能溯源</span>' : ''}</li>`)}
+    <b class="small">理由与当时证据是否一致</b>${li(a.reason_assessment, x => `<li>${supportTag(x)}${typeTag(x.type)}${h(x.text)} ${claimTail(x)}</li>`)}
     <b class="small">从理由中拆出的可检验假设</b>${li(a.hypotheses, x => `<li>${h(x.hypothesis)}${x.how_to_check ? `<div class="small muted">如何检验：${h(x.how_to_check)}</div>` : ''}</li>`)}
-    <b class="small">当时就能看到的风险信号</b>${li(a.visible_risks, x => `<li>${typeTag(x.type)}${h(x.text)} ${refChips(x.refs)}</li>`)}
+    <b class="small">当时就能看到的风险信号</b>${li(a.visible_risks, x => `<li>${supportTag(x)}${typeTag(x.type)}${h(x.text)} ${claimTail(x)}</li>`)}
   </section>`;
 }
 
@@ -277,8 +292,8 @@ function renderExPost(rv, pack) {
   const li = (arr, f) => (arr?.length ? `<ul>${arr.map(f).join('')}</ul>` : '<p class="muted small">无</p>');
   const verdictTag = v => `<span class="tag ${v === '成立' ? 'fact' : v === '不成立' ? 'warn' : 'unc'}">${h(v)}</span>`;
   return `<section class="post"><h3>C. 事后检验与归因 <span class="gen">${genLabel(rv.stage2 || rv)}</span></h3>
-    <b class="small">假设检验</b>${li(p.hypothesis_check, x => `<li>${verdictTag(x.verdict)}<b>${h(x.hypothesis)}</b>：${h(x.text || '')} ${refChips(x.refs)}</li>`)}
-    <b class="small">归因</b>${li(p.attribution, x => `<li><span class="tag unc">${h(x.factor)}</span><span class="tag ${x.confidence === '高' ? 'fact' : x.confidence === '中' ? 'inference' : 'unc'}">置信度 ${h(x.confidence)}</span>${h(x.text)} ${refChips(x.refs)}${x.unreferenced ? '<span class="tag warn">无证据引用</span>' : ''}${x.untraced ? '<span class="tag warn">数字未能溯源</span>' : ''}</li>`)}
+    <b class="small">假设检验</b>${li(p.hypothesis_check, x => `<li>${verdictTag(x.verdict)}${supportTag(x)}<b>${h(x.hypothesis)}</b>：${h(x.text || '')} ${claimTail(x)}${x.support_notes?.length && x.support !== 'pass' ? `<div class="small muted">${h(x.support_notes.join('；'))}</div>` : ''}</li>`)}
+    <b class="small">归因</b>${li(p.attribution, x => `<li><span class="tag unc">${h(x.factor)}</span><span class="tag ${x.confidence === '高' ? 'fact' : x.confidence === '中' ? 'inference' : 'unc'}">置信度 ${h(x.confidence)}</span>${supportTag(x)}${h(x.text)} ${claimTail(x)}${x.unreferenced ? '<span class="tag warn">无相关证据</span>' : ''}</li>`)}
     <b class="small">不确定因素</b>${li(p.uncertainties, x => `<li><span class="tag unc">不确定</span>${h(x.text)}</li>`)}
     <b class="small">可复用的经验</b>${li(p.lessons, (x, i) => `<li>${h(x.text)}${x.trigger ? `<div class="small muted">何时提醒：${h(x.trigger)}</div>` : ''} <button class="btn ghost small" data-add-lesson="${i}">加入清单</button></li>`)}
     <div style="margin-top:8px"><button class="btn primary" data-add-lesson="all">把本次经验和触发的偏差全部加入清单</button></div>
@@ -287,13 +302,16 @@ function renderExPost(rv, pack) {
 
 function renderValidation(rv) {
   const reps = [rv.stage1?.report, rv.stage2?.report].filter(Boolean);
-  if (!reps.length) return `<div class="validation">本次为规则引擎生成，所有数字都直接来自证据，无需 AI 校验。</div>`;
+  if (!reps.length) return `<div class="validation">本次为规则引擎生成，数字直接来自证据；结论同样经过证据相关性校验并标注支撑程度。<div class="small muted">${h(SUPPORT_NOTE)}</div></div>`;
   const sum = k => reps.reduce((s, r) => s + (Array.isArray(r[k]) ? r[k].length : r[k] || 0), 0);
   const list = (k, f) => reps.flatMap(r => r[k] || []).map(f).map(x => `<li>${h(x)}</li>`).join('');
+  const sup = k => reps.reduce((s, r) => s + (r.support?.[k] || 0), 0);
   return `<div class="validation"><b>AI 输出校验</b>：共 ${sum('total')} 条结论，${sum('passed')} 条保留；
-    移除 ${sum('removed')} 条（后见之明），降级 ${sum('downgraded')} 条（无有效引用），合规过滤 ${sum('compliance')} 句，数字未能溯源 ${sum('untraced_numbers')} 处。
-    ${sum('removed') + sum('downgraded') + sum('compliance') + sum('untraced_numbers') ? `<details><summary>查看明细</summary><ul>
-      ${list('removed', x => `移除：${x.text}（${x.reason}）`)}${list('downgraded', x => `降级：${x.text}（${x.reason}）`)}
+    移除 ${sum('removed')} 条（后见之明），隐藏 ${sum('hidden')} 条（与记录矛盾或失去全部证据），降级 ${sum('downgraded')} 条，移除不相关引用 ${sum('irrelevant_refs')} 条，合规过滤 ${sum('compliance')} 句，数字未能溯源 ${sum('untraced_numbers')} 处。
+    <div>核心结论：结构化校验通过 ${sup('pass')} 条 · 证据有限 ${sup('limited')} 条 · 无法判断 ${sup('undetermined')} 条</div>
+    <div class="small muted">${h(SUPPORT_NOTE)}</div>
+    ${sum('removed') + sum('downgraded') + sum('compliance') + sum('untraced_numbers') + sum('hidden') + sum('irrelevant_refs') ? `<details><summary>查看明细</summary><ul>
+      ${list('removed', x => `移除：${x.text}（${x.reason}）`)}${list('hidden', x => `隐藏：${x.text}（${x.reason}）`)}${list('downgraded', x => `降级：${x.text}（${x.reason}）`)}${list('irrelevant_refs', x => `不相关引用 ${x.ref}：${x.reason}`)}
       ${list('compliance', x => `合规过滤（${x.label}）：${x.sentence}`)}${list('untraced_numbers', x => `数字未溯源：${x.number} — ${x.text}`)}</ul></details>` : ''}
     <div class="small muted" style="margin-top:4px">耗时 ${[rv.stage1?.latency_ms, rv.stage2?.latency_ms].filter(Boolean).map(v => (v / 1000).toFixed(1) + 's').join(' + ')}${rv.stage2?.usage ? ` · tokens ${(rv.stage1?.usage?.total_tokens || 0) + (rv.stage2?.usage?.total_tokens || 0)}` : ''}</div></div>`;
 }
@@ -307,12 +325,12 @@ async function generateReview(id, quiet = false) {
   const s1 = await callReview('ex_ante', pack, null);
   let exAnte;
   if (s1.ok) { exAnte = s1.data; rv.stage1 = { generator: 'ai', model: s1.model, report: s1.report, latency_ms: s1.latency_ms, usage: s1.usage }; }
-  else { exAnte = ruleBasedReview(pack).ex_ante; rv.stage1 = { generator: 'rules', ai_error: s1.message }; }
+  else { const v = validateAIOutput('ex_ante', ruleBasedReview(pack).ex_ante, pack.evidence); exAnte = v.data; rv.stage1 = { generator: 'rules', ai_error: s1.message, rules_report: v.report }; }
   if (!quiet) out.innerHTML = `${tradeHeader(pack)}<p><span class="spinner"></span> 第 2 步：对照事后信息检验假设、做归因…</p>`;
   const s2 = await callReview('ex_post', pack, exAnte);
   let exPost;
   if (s2.ok) { exPost = s2.data; rv.stage2 = { generator: 'ai', model: s2.model, report: s2.report, latency_ms: s2.latency_ms, usage: s2.usage }; }
-  else { exPost = ruleBasedReview(pack).ex_post; rv.stage2 = { generator: 'rules', ai_error: s2.message }; }
+  else { const v = validateAIOutput('ex_post', ruleBasedReview(pack).ex_post, pack.evidence); exPost = v.data; rv.stage2 = { generator: 'rules', ai_error: s2.message, rules_report: v.report }; }
   rv.ex_ante = exAnte; rv.ex_post = exPost;
   rv.generator = rv.stage1.generator === 'ai' && rv.stage2.generator === 'ai' ? 'ai' : 'rules';
   rv.model = s2.model || s1.model; rv.ai_error = s2.message || s1.message;

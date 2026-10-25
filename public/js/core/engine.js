@@ -19,6 +19,13 @@ export function analyze(trades, market) {
   }
   const portfolio = portfolioBiases(roundTrips);
 
+  // 计划类证据（用户当时的记录）与规则类证据（偏差规则结果）：都来自真实记录，带可核对的结构化字段
+  for (const c of contexts) {
+    c.evidence.push(...recordEvidence(c.trade));
+    c.evidence.push(...ruleEvidence(biasesByTrade[c.trade.id] || [], `E-${c.trade.id}`, c.trade.aligned_date || c.trade.date));
+  }
+  for (const rt of roundTrips) rt.evidence.push(...ruleEvidence(rt.biases, `E-rt-${rt.buy_id}-${rt.sell_id}`, rt.sell_date));
+
   const totalPnl = roundTrips.reduce((s, r) => s + r.pnl, 0);
   const wins = roundTrips.filter(r => r.pnl > 0).length;
   const summary = {
@@ -30,6 +37,32 @@ export function analyze(trades, market) {
     data_errors: contexts.flatMap(c => c.checks).filter(x => x.level === 'error').length,
   };
   return { trades: sorted, contexts, roundTrips, openLots, issues, biasesByTrade, portfolio, summary };
+}
+
+const REC_FIELDS = [['reason', '当时理由'], ['hypotheses', '关键假设'], ['exit_plan', '退出计划']];
+const BIAS_STATUS_TEXT = { triggered: '触发', watch: '值得留意', clear: '未触发', insufficient: '数据不足' };
+
+/** 用户交易记录中的文字字段 → 证据。未填写也如实记录为“未填写”。 */
+export function recordEvidence(t) {
+  return REC_FIELDS.map(([f, label]) => {
+    const v = String(t[f] || '').trim();
+    return {
+      id: `E-${t.id}-rec_${f}`, trade_id: t.id, phase: 'ex_ante', kinds: ['plan'], timing: 'at_decision', state: v ? 'filled' : 'missing',
+      label: `用户记录：${label}`, value: v || '（未填写）', unit: 'text', display: v ? v.slice(0, 80) : '（未填写）', as_of: t.aligned_date || t.date,
+      source: { api: '用户交易记录', thscode: t.thscode }, calc: '交易时由用户填写；若事后补记，时序以用户声明为准',
+    };
+  });
+}
+
+/** 偏差规则结果 → 证据。status 为规则的确定性结果。 */
+export function ruleEvidence(biases, prefix, asOf) {
+  return (biases || []).filter(b => b.id && b.id !== 'data').map(b => ({
+    id: `${prefix}-rule-${b.id}`, phase: b.phase === 'same_day' ? 'same_day' : b.phase === 'ex_post' ? 'ex_post' : 'ex_ante', kinds: ['rule'],
+    timing: b.phase === 'same_day' ? 'partial' : b.phase === 'ex_post' ? 'post' : 'pre', status: b.status,
+    label: `规则检查：${b.name}`, value: `${BIAS_STATUS_TEXT[b.status] || b.status}${b.detail ? '（' + b.detail + '）' : ''}`, unit: 'text',
+    display: `${BIAS_STATUS_TEXT[b.status] || b.status}${b.detail ? '：' + b.detail : ''}`.slice(0, 120), as_of: asOf,
+    source: { api: '复盘镜规则引擎', rule: b.rule || '' }, calc: b.rule || '',
+  }));
 }
 
 function avg(a) { return a.length ? a.reduce((x, y) => x + y, 0) / a.length : null; }

@@ -27,7 +27,17 @@ function simulated(kind) {
   return state.simulate.has('all') || state.simulate.has(kind);
 }
 
+// 超时、网络错误、上游超时/不可用、限流时自动重试一次，仍失败再退回快照
+const RETRYABLE = new Set(['TIMEOUT', 'NETWORK', 5002, 5003, 4001]);
 async function liveCall(path, params, kind) {
+  const first = await liveCallOnce(path, params, kind);
+  if (first.ok || first.simulated || !RETRYABLE.has(first.code)) return first;
+  await new Promise(r => setTimeout(r, 800));
+  const second = await liveCallOnce(path, params, kind);
+  return second.ok ? { ...second, retried: true } : { ...second, message: `${second.message}（已重试 1 次）` };
+}
+
+async function liveCallOnce(path, params, kind) {
   if (simulated(kind)) {
     return { ok: false, code: 5003, message: '故障演练：模拟数据源不可用（code=5003）', data: null, fetched_at: new Date().toISOString(), simulated: true };
   }
@@ -39,7 +49,7 @@ async function liveCall(path, params, kind) {
     if (!r.ok) return { ok: false, code: `HTTP_${r.status}`, message: `代理返回 HTTP ${r.status}`, data: null, fetched_at: new Date().toISOString() };
     return await r.json();
   } catch (e) {
-    return { ok: false, code: 'NETWORK', message: e.name === 'AbortError' ? '请求超时' : `网络错误：${e.message}`, data: null, fetched_at: new Date().toISOString() };
+    return { ok: false, code: e.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK', message: e.name === 'AbortError' ? '请求超时' : `网络错误：${e.message}`, data: null, fetched_at: new Date().toISOString() };
   } finally { clearTimeout(timer); }
 }
 

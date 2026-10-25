@@ -298,3 +298,27 @@ test('过程分：违背自己写下的计划时，分数再高也不算“过�
   ], { byCode: { '600000.SH': m }, bench: BENCH() });
   assert.match(r.roundTrips[0].process.quadrant, /^过程差/);
 });
+test('波动率显示不带正负号', () => {
+  const c = buildTradeContext({ id: 'v', date: '2025-03-03', thscode: '600000.SH', side: 'buy', qty: 1, price: null }, market('600000.SH', { seed: 3 }), BENCH());
+  const e = c.evidence.find(x => x.id === 'E-v-pre_vol_20');
+  assert.ok(!e.display.startsWith('+'));
+  assert.match(e.display, /%$/);
+});
+test('回归（线上实测发现）：“理由未说明目标价”不应被当作给出目标价而过滤', () => {
+  assert.equal(filterCompliance('“落袋为安”属于止盈倾向，但理由未说明止盈阈值、持有成本或目标价，无法检验其触发条件。').hits.length, 0);
+  assert.equal(filterCompliance('目标价 1800 元。').hits.length, 1);
+  assert.equal(filterCompliance('目标价看高一线。').hits.length, 1);
+  assert.equal(filterCompliance('上看 2000。').hits.length, 1);
+});
+test('回归（线上实测发现）：“事后难以判断”说的是复盘难度，不应被当作后见之明移除', () => {
+  const ok = validateAIOutput('ex_ante', { visible_risks: [{ text: '理由未填写假设与退出计划，决策缺少可复核的前置条件，事后难以判断卖出是否按计划执行。', type: 'inference', refs: [] }] }, EVID);
+  assert.equal(ok.report.removed.length, 0);
+  for (const s of ['后来股价大跌。', '买入后连续下跌。', '随后走势转弱。', '事后看这是高点。', '最终亏损离场。', '之后股价反弹。']) {
+    const r = validateAIOutput('ex_ante', { visible_risks: [{ text: s, type: 'inference', refs: [] }] }, EVID);
+    assert.equal(r.report.removed.length, 1, s);
+  }
+});
+test('回归（线上实测发现）：“目标价、止损位均未记录”不被过滤', () => {
+  assert.equal(filterCompliance('核对交易前是否记录过成本价、目标价或基本面触发条件；').hits.length, 0);
+  assert.equal(filterCompliance('买入时的原始假设与目标价、止损位均未记录，无法判断买入逻辑是否成立。').hits.length, 0);
+});
