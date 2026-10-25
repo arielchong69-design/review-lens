@@ -91,7 +91,7 @@ export const HYPOTHESIS_RULES = {
   事件或消息: { allow: ['event'], requireAny: ['event'], needPost: true, anchor: false },
   基本面或经营: { unsupported: '现有证据库不含财务或经营数据，无法检验该类假设' },
   // 有第二比较基准时可以检验；用户指定且未确认成分关系的基准最高“证据有限”
-  行业或板块: { allow: ['sector', 'outcome', 'sector_meta'], requireAny: ['sector'], needPost: true, anchor: true, needSector: true, unsupportedNoSector: '未设置行业或概念比较指数（或获取失败），无法检验该类假设' },
+  行业或板块: { allow: ['sector', 'outcome', 'sector_meta'], requireAny: ['sector'], needPost: true, anchor: true, needSector: true, unsupportedNoSector: '未设置行业或概念比较指数，或比较指数在该交易区间没有可用数据（获取失败、或交易日该指数尚无行情），无法检验该类假设' },
   其他: { unsupported: '假设类型不明确，无法用现有证据检验' },
 };
 

@@ -12,7 +12,7 @@ import { makeBars } from './fixtures.mjs';
 
 const CAT = {
   industry: { ok: true, items: [{ thscode: '881125.TI', name: '白酒' }] },
-  cn_concept: { ok: true, items: [{ thscode: '886042.TI', name: '白酒概念' }, { thscode: '885728.TI', name: '人工智能' }] },
+  cn_concept: { ok: true, items: [{ thscode: '885525.TI', name: '白酒概念' }, { thscode: '885728.TI', name: '人工智能' }] },
 };
 const CONS = (...codes) => ({ ok: true, items: codes.map(c => ({ thscode: c })) });
 const BENCH = { thscode: '000300.SH', name: '沪深300', bars: normalizeBars(makeBars({ start: '2024-06-01', end: '2025-06-30', startPrice: 3500, seed: 9, vol: 0.008 })), meta: { ok: true, mode: 'live' } };
@@ -23,8 +23,8 @@ function md(sector, extra = {}) {
 }
 const sectorOf = (role = 'concept_member', bars = sectorBars) => {
   const base = role === 'industry_member' ? resolveSector('881125.TI', '600000.SH', CAT, CONS('600000.SH'))
-    : role === 'concept_member' ? resolveSector('886042.TI', '600000.SH', CAT, CONS('600000.SH'))
-      : resolveSector('886042.TI', '600000.SH', CAT, CONS('000001.SZ'));
+    : role === 'concept_member' ? resolveSector('885525.TI', '600000.SH', CAT, CONS('600000.SH'))
+      : resolveSector('885525.TI', '600000.SH', CAT, CONS('000001.SZ'));
   return { ...base, bars, meta: { ok: true, mode: 'live', request_id: 'sec-req' } };
 };
 const BUY = { id: 'b', date: '2025-03-03', thscode: '600000.SH', side: 'buy', qty: 100, price: null, reason: '板块热度高', hypotheses: '板块热度延续', exit_plan: '止损-8%' };
@@ -34,7 +34,7 @@ const run = (sector, extra) => analyze([BUY, SELL], { byCode: { '600000.SH': md(
 // ---------- 代码校验与类型区分 ----------
 test('比较指数代码格式：只接受同花顺 .TI 代码，空值允许', () => {
   assert.equal(checkSectorCode('').empty, true);
-  assert.equal(checkSectorCode(' 886042.ti ').code, '886042.TI');
+  assert.equal(checkSectorCode(' 885525.ti ').code, '885525.TI');
   assert.equal(checkSectorCode('000300.SH').ok, false);
   assert.equal(checkSectorCode('白酒').ok, false);
 });
@@ -46,11 +46,11 @@ test('行业指数 + 当前成分股 → 所属行业指数，并注明历史成
   assert.ok(s.notes.some(n => /历史/.test(n)));
 });
 test('概念指数即使包含该股，也不会被标为“所属行业”', () => {
-  const s = resolveSector('886042.TI', '600000.SH', CAT, CONS('600000.SH'));
+  const s = resolveSector('885525.TI', '600000.SH', CAT, CONS('600000.SH'));
   assert.equal(s.type, 'concept');
   assert.equal(s.role, 'concept_member');
   assert.ok(!/所属行业/.test(s.roleLabel));
-  assert.match(sectorDisplay(s), /白酒概念（886042\.TI，概念指数 · 相关概念指数/);
+  assert.match(sectorDisplay(s), /白酒概念（885525\.TI，概念指数 · 相关概念指数/);
 });
 test('不在当前成分股中 → 用户指定的比较基准，明确不认定为所属行业', () => {
   const s = resolveSector('881125.TI', '600000.SH', CAT, CONS('000001.SZ'));
@@ -69,7 +69,7 @@ test('目录正常但找不到该代码 → 判为无效，不使用', () => {
   assert.match(s.error, /找不到/);
 });
 test('目录获取失败 → 名称和类型标为“未核实”，只能作为用户指定基准', () => {
-  const s = resolveSector('886042.TI', '600000.SH', { industry: { ok: false }, cn_concept: { ok: false } }, CONS('600000.SH'));
+  const s = resolveSector('885525.TI', '600000.SH', { industry: { ok: false }, cn_concept: { ok: false } }, CONS('600000.SH'));
   assert.equal(s.verified, false);
   assert.equal(s.type, 'unknown');
   assert.equal(s.role, 'user_specified');
@@ -77,8 +77,8 @@ test('目录获取失败 → 名称和类型标为“未核实”，只能作为
 test('CSV：新增“比较指数”列可选；旧模板仍能导入；非法代码报错；同一股票多个代码给出提示', () => {
   const old = parseTradesCSV('日期,代码,方向,数量\n2025-01-06,600519.SH,买入,100');
   assert.equal(old.trades.length, 1);
-  const r = parseTradesCSV('日期,代码,方向,数量,比较指数\n2025-01-06,600519.SH,买入,100,886042.TI\n2025-01-07,600519.SH,卖出,100,881125.TI\n2025-01-08,600000.SH,买入,1,000300.SH');
-  assert.equal(r.trades[0].sector_code, '886042.TI');
+  const r = parseTradesCSV('日期,代码,方向,数量,比较指数\n2025-01-06,600519.SH,买入,100,885525.TI\n2025-01-07,600519.SH,卖出,100,881125.TI\n2025-01-08,600000.SH,买入,1,000300.SH');
+  assert.equal(r.trades[0].sector_code, '885525.TI');
   assert.ok(r.errors.some(e => /比较指数/.test(e)));
   assert.equal(sectorCodesByStock(r.trades).warnings.length, 1);
 });
@@ -184,4 +184,14 @@ test('提示词：带比较指数说明与称谓规则；事前阶段不含决�
   assert.ok(u.evidence.some(e => e.kind === 'sector_meta'));
   assert.ok(!u.evidence.some(e => /sector_post|excess_sector/.test(e.id)));
   assert.match(buildExPostPrompt(p, null).system, /不能写成因果结论/);
+});
+test('比较指数在交易日之后才有行情（线上实测：AI应用指数从 2026-01-13 开始）→ 不做任何相对比较，并说明原因', () => {
+  const late = sectorBars.filter(b => b.date > '2025-03-03');
+  const c = buildTradeContext(BUY, md(sectorOf('concept_member', late)), BENCH);
+  assert.ok(c.checks.some(x => x.code === 'SECTOR_STARTS_AFTER' && /决策时该指数尚无数据/.test(x.msg)));
+  assert.ok(c.evidence.filter(e => /sector/.test(e.id) && e.id !== 'E-b-sector_info').every(e => e.value == null));
+  assert.match(c.evidence.find(e => e.id === 'E-b-sector_info').value, /交易日尚无数据/);
+  const p = buildPack(analyze([BUY, SELL], { byCode: { '600000.SH': md(sectorOf('concept_member', late)) }, bench: BENCH }), 'b');
+  const { data } = validateAIOutput('ex_post', { hypothesis_check: [{ hypothesis: '板块热度延续', hypothesis_type: '行业或板块', verdict: '成立', text: 'x', refs: [] }] }, p.evidence);
+  assert.equal(data.hypothesis_check[0].verdict, '无法判断');
 });

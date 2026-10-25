@@ -234,7 +234,11 @@ export function buildTradeContext(trade, md, bench) {
     ev.push({ id: `E-${tid}-sector_info`, trade_id: tid, phase: 'ex_ante', kinds: ['sector_meta'], timing: 'at_decision', label: '第二比较基准', value: `${sec.name}（${sec.thscode}）：${sec.typeLabel}；${sec.roleLabel}`, unit: 'text', display: `${sec.name}（${sec.thscode}）：${sec.typeLabel}；${sec.roleLabel}`, as_of: alignedDate, source: { api: '/api/a-share-index/catalog/ths-index-list + /api/a-share-index/constituents/ths-stock-list', thscode: sec.thscode }, calc: sec.notes.join('；'), sector_type: sec.type, sector_role: sec.role });
     if (!sb.length) checks.push({ level: 'warn', code: 'SECTOR_MISSING', msg: `第二比较基准 ${sec.name} 行情获取失败（${sec.meta?.message || '未知原因'}），相对该指数的比较无法给出；沪深300 比较不受影响` });
     else {
-      if (si < 0) checks.push({ level: 'warn', code: 'SECTOR_MISSING_DAY', msg: `第二比较基准 ${sec.name} 在 ${alignedDate} 没有数据，相对该指数的比较无法给出` });
+      if (si < 0 && sb[0].date > alignedDate) {
+        checks.push({ level: 'warn', code: 'SECTOR_STARTS_AFTER', msg: `第二比较基准 ${sec.name} 的行情从 ${sb[0].date} 才开始，晚于交易日 ${alignedDate}：决策时该指数尚无数据（可能尚未发布），本笔交易不做相对该指数的比较；沪深300 比较不受影响` });
+        const info = ev.find(e => e.id === `E-${tid}-sector_info`);
+        if (info) { info.value += `；该指数行情从 ${sb[0].date} 开始，交易日尚无数据`; info.display = info.value; }
+      } else if (si < 0) checks.push({ level: 'warn', code: 'SECTOR_MISSING_DAY', msg: `第二比较基准 ${sec.name} 在 ${alignedDate} 没有数据，相对该指数的比较无法给出` });
       m.sector_pre_ret_20 = si > 0 ? windowRet(sb, si - 1, 20) : null;
       m.sector_day_ret = si > 0 ? sb[si].close / sb[si - 1].close - 1 : null;
       add('sector_pre_ret_20', 'ex_ante', `比较指数（${sTag}）前20日涨跌幅`, m.sector_pre_ret_20 == null ? null : round4(m.sector_pre_ret_20), '%', { as_of: asOfPre, source: sSrc, calc: `指数收盘价，${preCalc}` });

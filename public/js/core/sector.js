@@ -18,7 +18,7 @@ export const HISTORY_CAVEAT = '成分关系按当前成分股判断，历史成�
 export function checkSectorCode(code) {
   const c = String(code || '').trim().toUpperCase();
   if (!c) return { code: '', ok: true, empty: true };
-  if (!SECTOR_CODE_RE.test(c)) return { code: c, ok: false, error: `比较指数“${code}”格式不对，需为同花顺行业或概念指数代码，如 886042.TI` };
+  if (!SECTOR_CODE_RE.test(c)) return { code: c, ok: false, error: `比较指数“${code}”格式不对，需为同花顺行业或概念指数代码，如 881273.TI` };
   return { code: c, ok: true };
 }
 

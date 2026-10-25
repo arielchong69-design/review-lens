@@ -26,12 +26,12 @@ export async function mockFuyaoFetch(url) {
     return ok({ items: evs, was_truncated: false });
   }
   if (p === 'a-share-index/catalog/ths-index-list') {
-    const items = q.tag === 'industry' ? [{ thscode: '881125.TI', name: '白酒（模拟）' }, { thscode: '881156.TI', name: '保险（模拟）' }]
-      : [{ thscode: '886042.TI', name: '白酒概念（模拟）' }, { thscode: '885728.TI', name: '人工智能（模拟）' }];
+    const items = q.tag === 'industry' ? [{ thscode: '881273.TI', name: '白酒（模拟）' }, { thscode: '881156.TI', name: '保险（模拟）' }, { thscode: '884099.TI', name: '乘用车（模拟）' }]
+      : [{ thscode: '885525.TI', name: '白酒概念（模拟）' }, { thscode: '886108.TI', name: 'AI应用（模拟）' }];
     return ok({ timestamp: Date.now(), item: items });
   }
   if (p === 'a-share-index/constituents/ths-stock-list') {
-    const members = { '881125.TI': ['600519.SH'], '881156.TI': ['601318.SH'], '886042.TI': ['600519.SH'], '885728.TI': ['300033.SZ'] }[q.thscode] || [];
+    const members = { '881273.TI': ['600519.SH'], '881156.TI': ['601318.SH'], '885525.TI': ['600519.SH'], '886108.TI': ['300033.SZ'], '884099.TI': ['002594.SZ'] }[q.thscode] || [];
     return ok({ timestamp: Date.now(), item: members.map(c => ({ thscode: c, ticker: c.slice(0, 6), name: c })) });
   }
   if (p === 'meta/tickers/search') return ok({ timestamp: Date.now(), item: [{ thscode: '600519.SH', ticker: '600519', name: '贵州茅台', asset_type: 'a-share' }] });
