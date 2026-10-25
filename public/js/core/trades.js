@@ -1,11 +1,12 @@
 // 交易记录：解析、校验、FIFO 配对成"回合"（round trip）。
 import { normalizeDate } from './dates.js';
+import { checkSectorCode } from './sector.js';
 
 export const THSCODE_RE = /^\d{6}\.(SH|SZ|BJ)$/;
 
 const SIDE_MAP = { '买': 'buy', '买入': 'buy', 'buy': 'buy', 'b': 'buy', '卖': 'sell', '卖出': 'sell', 'sell': 'sell', 's': 'sell' };
 
-export const CSV_HEADERS = ['日期', '时间', '代码', '名称', '方向', '价格', '数量', '当时理由', '关键假设', '退出计划', '信心'];
+export const CSV_HEADERS = ['日期', '时间', '代码', '名称', '方向', '价格', '数量', '当时理由', '关键假设', '退出计划', '信心', '比较指数'];
 
 /** 极简 CSV 解析（支持双引号转义、字段内逗号与换行） */
 export function parseCSV(text) {
@@ -40,7 +41,7 @@ export function toCSV(trades) {
   const lines = [CSV_HEADERS.join(',')];
   for (const t of trades) {
     lines.push([t.date, t.time || '', t.thscode, t.name || '', t.side === 'buy' ? '买入' : '卖出',
-      t.price ?? '', t.qty, t.reason || '', t.hypotheses || '', t.exit_plan || '', t.confidence ?? ''].map(esc).join(','));
+      t.price ?? '', t.qty, t.reason || '', t.hypotheses || '', t.exit_plan || '', t.confidence ?? '', t.sector_code || ''].map(esc).join(','));
   }
   return lines.join('\n');
 }
@@ -66,6 +67,8 @@ export function normalizeTrade(raw, idx = 0) {
   if (price === null) warnings.push(`第${idx + 1}条：未填成交价，将以当日收盘价（不复权）代替，并在复盘中标注为“假设”`);
   let confidence = raw.confidence === '' || raw.confidence == null ? null : Number(raw.confidence);
   if (confidence !== null && !(confidence >= 1 && confidence <= 5)) { warnings.push(`第${idx + 1}条：信心应为1–5，已忽略`); confidence = null; }
+  const sc = checkSectorCode(raw.sector_code);
+  if (!sc.ok) errors.push(`第${idx + 1}条：${sc.error}`);
   const reason = String(raw.reason || '').trim();
   if (!reason) warnings.push(`第${idx + 1}条：没有填写当时理由，过程质量将无法评估`);
   return {
@@ -74,7 +77,7 @@ export function normalizeTrade(raw, idx = 0) {
       date, time: time || null, thscode, name: String(raw.name || '').trim(), side, qty, price,
       price_assumed: price === null,
       reason, hypotheses: String(raw.hypotheses || '').trim(), exit_plan: String(raw.exit_plan || '').trim(),
-      confidence,
+      confidence, sector_code: sc.ok ? sc.code : '',
     },
     errors, warnings,
   };
@@ -95,7 +98,7 @@ export function parseTradesCSV(text) {
     const { trade, errors: e, warnings: w } = normalizeTrade({
       date: get(r, '日期'), time: get(r, '时间'), thscode: get(r, '代码'), name: get(r, '名称'),
       side: get(r, '方向'), price: get(r, '价格'), qty: get(r, '数量'), reason: get(r, '当时理由'),
-      hypotheses: get(r, '关键假设'), exit_plan: get(r, '退出计划'), confidence: get(r, '信心'),
+      hypotheses: get(r, '关键假设'), exit_plan: get(r, '退出计划'), confidence: get(r, '信心'), sector_code: get(r, '比较指数'),
     }, i);
     errors.push(...e); warnings.push(...w);
     if (!e.length) trades.push(trade);

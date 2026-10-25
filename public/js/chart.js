@@ -12,7 +12,7 @@ const css = name => getComputedStyle(document.documentElement).getPropertyValue(
  * @param container DOM
  * @param opts { bars, bench, trades:[{id,date,side,label}], events:[{date,label}], cutoff: 'YYYY-MM-DD'|null, onPick(tradeId) }
  */
-export function renderChart(container, { bars, bench, trades, events, cutoff, onPick }) {
+export function renderChart(container, { bars, bench, sector, trades, events, cutoff, onPick }) {
   container.innerHTML = '';
   if (!bars?.length) { container.innerHTML = '<div class="msg error">没有可用的行情数据，无法绘制走势图。</div>'; return; }
   const W = Math.max(640, container.clientWidth || 900), H = 320;
@@ -26,16 +26,16 @@ export function renderChart(container, { bars, bench, trades, events, cutoff, on
   const idxFor = d => { if (dateIdx.has(d)) return dateIdx.get(d); for (let i = 0; i < n; i++) if (bars[i].date >= d) return i; return null; };
 
   // 基准按首个共同日期归一到个股价格
-  let benchPts = [];
-  if (bench?.length) {
-    const bmap = new Map(bench.map(b => [b.date, b.close]));
+  const normalize = series => {
+    if (!series?.length) return [];
+    const bmap = new Map(series.map(b => [b.date, b.close]));
     const first = bars.find(b => bmap.has(b.date));
-    if (first) {
-      const k = first.close / bmap.get(first.date);
-      benchPts = bars.map((b, i) => (bmap.has(b.date) ? [i, bmap.get(b.date) * k] : null)).filter(Boolean);
-    }
-  }
-  const vals = bars.map(b => b.close).concat(benchPts.map(p => p[1]));
+    if (!first) return [];
+    const k = first.close / bmap.get(first.date);
+    return bars.map((b, i) => (bmap.has(b.date) ? [i, bmap.get(b.date) * k] : null)).filter(Boolean);
+  };
+  const benchPts = normalize(bench), sectorPts = normalize(sector);
+  const vals = bars.map(b => b.close).concat(benchPts.map(p => p[1]), sectorPts.map(p => p[1]));
   let lo = Math.min(...vals), hi = Math.max(...vals);
   const span = hi - lo || 1; lo -= span * 0.06; hi += span * 0.06;
   const y = v => pad.t + (1 - (v - lo) / (hi - lo)) * (H - pad.t - pad.b);
@@ -62,6 +62,7 @@ export function renderChart(container, { bars, bench, trades, events, cutoff, on
   }
 
   if (benchPts.length) el('polyline', { points: benchPts.map(([i, v]) => `${x(i)},${y(v)}`).join(' '), fill: 'none', stroke: muted, 'stroke-width': 1.2, 'stroke-dasharray': '5 4', opacity: 0.8 }, svg);
+  if (sectorPts.length) el('polyline', { points: sectorPts.map(([i, v]) => `${x(i)},${y(v)}`).join(' '), fill: 'none', stroke: css('--same'), 'stroke-width': 1.3, 'stroke-dasharray': '2 3', opacity: 0.9 }, svg);
   el('polyline', { points: bars.map((b, i) => `${x(i)},${y(b.close)}`).join(' '), fill: 'none', stroke: css('--brand'), 'stroke-width': 1.8 }, svg);
 
   const show = (evt, html) => {

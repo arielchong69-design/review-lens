@@ -223,6 +223,36 @@ export function buildTradeContext(trade, md, bench) {
     add('post_mfe_20', 'ex_post', '交易后20日内最大有利波动', m.post_mfe_20, '%', { as_of: adj[end].date, source: pSrc, calc: '区间最高价相对成交价' });
   }
 
+  // 5b) 第二比较基准（行业 / 概念指数）：口径与沪深300完全相同；缺失时只提示，不影响主链路
+  const sec = md?.sector;
+  if (sec?.valid) {
+    const sb = sec.bars || [];
+    const sTag = `${sec.name}·${sec.typeLabel}`;
+    const sSrc = { api: '/api/a-share-index/prices/historical', thscode: sec.thscode, request_id: sec.meta?.request_id || null, fetched_at: sec.meta?.fetched_at || null, mode: sec.meta?.mode || null };
+    const si = sb.length ? idxOf(sb, alignedDate) : -1;
+    // 关系说明本身也作为证据（事前已知：代码由用户在决策时指定；成分关系为当前快照）
+    ev.push({ id: `E-${tid}-sector_info`, trade_id: tid, phase: 'ex_ante', kinds: ['sector_meta'], timing: 'at_decision', label: '第二比较基准', value: `${sec.name}（${sec.thscode}）：${sec.typeLabel}；${sec.roleLabel}`, unit: 'text', display: `${sec.name}（${sec.thscode}）：${sec.typeLabel}；${sec.roleLabel}`, as_of: alignedDate, source: { api: '/api/a-share-index/catalog/ths-index-list + /api/a-share-index/constituents/ths-stock-list', thscode: sec.thscode }, calc: sec.notes.join('；'), sector_type: sec.type, sector_role: sec.role });
+    if (!sb.length) checks.push({ level: 'warn', code: 'SECTOR_MISSING', msg: `第二比较基准 ${sec.name} 行情获取失败（${sec.meta?.message || '未知原因'}），相对该指数的比较无法给出；沪深300 比较不受影响` });
+    else {
+      if (si < 0) checks.push({ level: 'warn', code: 'SECTOR_MISSING_DAY', msg: `第二比较基准 ${sec.name} 在 ${alignedDate} 没有数据，相对该指数的比较无法给出` });
+      m.sector_pre_ret_20 = si > 0 ? windowRet(sb, si - 1, 20) : null;
+      m.sector_day_ret = si > 0 ? sb[si].close / sb[si - 1].close - 1 : null;
+      add('sector_pre_ret_20', 'ex_ante', `比较指数（${sTag}）前20日涨跌幅`, m.sector_pre_ret_20 == null ? null : round4(m.sector_pre_ret_20), '%', { as_of: asOfPre, source: sSrc, calc: `指数收盘价，${preCalc}` });
+      add('sector_day_ret', 'same_day', `比较指数（${sTag}）交易当日涨跌幅`, m.sector_day_ret == null ? null : round4(m.sector_day_ret), '%', { as_of: alignedDate, source: sSrc, calc: '当日收盘 / 前收 − 1；决策时只能看到盘中的一部分' });
+      for (const k of [5, 20, 60]) {
+        const sp = si >= 0 && si + k < sb.length ? sb[si + k].close / sb[si].close - 1 : null;
+        m[`sector_post_ret_${k}`] = sp;
+        m[`post_excess_sector_${k}`] = m[`post_ret_${k}`] != null && sp != null ? m[`post_ret_${k}`] - sp : null;
+        const asOf = si >= 0 && si + k < sb.length ? sb[si + k].date : null;
+        const why = asOf ? '' : `（行情只到 ${sb[sb.length - 1].date}，窗口尚未走完）`;
+        add(`sector_post_ret_${k}`, 'ex_post', `比较指数（${sTag}）交易后${k}个交易日涨跌幅`, sp == null ? null : round4(sp), '%', { as_of: asOf, source: sSrc, calc: `指数收盘价，交易日收盘起算${why}` });
+        add(`post_excess_sector_${k}`, 'ex_post', `交易后${k}个交易日相对比较指数（${sec.name}）的差异`, m[`post_excess_sector_${k}`] == null ? null : round4(m[`post_excess_sector_${k}`]), '%', { as_of: asOf, source: { ...pSrc, api: pSrc.api + ' + ' + sSrc.api }, calc: `个股收益 − ${sec.name}同期收益；只说明表现差异，不说明原因${why}` });
+      }
+    }
+  } else if (md?.sectorError) {
+    checks.push({ level: 'warn', code: 'SECTOR_INVALID', msg: md.sectorError });
+  }
+
   // 6) 事件：按“信息首次可见时间”与决策时点比较
   const events = { pre: [], same: [], post: [] };
   const decisionMs = trade.time ? Date.parse(`${alignedDate}T${trade.time}:00Z`) - 8 * 3600 * 1000 : null;
@@ -299,5 +329,18 @@ export function buildRoundTripContext(rt, md, bench) {
     { id: `${id}-mae`, phase: 'ex_post', label: '持有期最大浮亏', value: out.hold_mae, unit: '%', display: pct(out.hold_mae), as_of: out.hold_mae_date, source: src, calc: '持有期最低价相对买入价（前复权换算）' },
     { id: `${id}-after`, phase: 'ex_post', label: '卖出后20个交易日涨跌幅', value: out.post_sell_ret_20, unit: '%', display: pct(out.post_sell_ret_20), as_of: si0 + 20 < adj.length ? adj[si0 + 20].date : null, source: src, calc: '相对卖出价；属于事后信息，仅供参考，不用于评判当时决策' },
   );
+  // 第二比较基准同期（行业 / 概念指数）
+  const sec = md?.sector;
+  out.sector_ret = null; out.excess_sector = null;
+  if (sec?.valid && sec.bars?.length) {
+    const sb = sec.bars;
+    const s1 = idxOf(sb, adj[bi0].date), s2 = idxOf(sb, adj[si0].date);
+    if (s1 >= 0 && s2 >= 0) { out.sector_ret = round4(sb[s2].close / sb[s1].close - 1); out.excess_sector = round4(rt.pnl_pct - out.sector_ret); }
+    const sSrc = { api: '/api/a-share-index/prices/historical', thscode: sec.thscode, request_id: sec.meta?.request_id || null };
+    out.evidence.push(
+      { id: `${id}-sector`, phase: 'ex_post', label: `比较指数（${sec.name}·${sec.typeLabel}）同期涨跌幅`, value: out.sector_ret, unit: '%', display: pct(out.sector_ret), as_of: rt.sell_date, source: sSrc, calc: '买入日收盘 → 卖出日收盘' },
+      { id: `${id}-excess_sector`, phase: 'ex_post', label: `回合相对比较指数（${sec.name}）的差异`, value: out.excess_sector, unit: '%', display: pct(out.excess_sector), as_of: rt.sell_date, source: src, calc: '回合收益 − 比较指数同期；只说明表现差异，不说明原因' },
+    );
+  }
   return out;
 }

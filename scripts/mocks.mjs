@@ -25,6 +25,15 @@ export async function mockFuyaoFetch(url) {
     ]).filter(e => { const d = msToDate(e.first_publish_time); return d >= q.begin_date && d <= q.end_date; });
     return ok({ items: evs, was_truncated: false });
   }
+  if (p === 'a-share-index/catalog/ths-index-list') {
+    const items = q.tag === 'industry' ? [{ thscode: '881125.TI', name: '白酒（模拟）' }, { thscode: '881156.TI', name: '保险（模拟）' }]
+      : [{ thscode: '886042.TI', name: '白酒概念（模拟）' }, { thscode: '885728.TI', name: '人工智能（模拟）' }];
+    return ok({ timestamp: Date.now(), item: items });
+  }
+  if (p === 'a-share-index/constituents/ths-stock-list') {
+    const members = { '881125.TI': ['600519.SH'], '881156.TI': ['601318.SH'], '886042.TI': ['600519.SH'], '885728.TI': ['300033.SZ'] }[q.thscode] || [];
+    return ok({ timestamp: Date.now(), item: members.map(c => ({ thscode: c, ticker: c.slice(0, 6), name: c })) });
+  }
   if (p === 'meta/tickers/search') return ok({ timestamp: Date.now(), item: [{ thscode: '600519.SH', ticker: '600519', name: '贵州茅台', asset_type: 'a-share' }] });
   return new Response(JSON.stringify({ code: 3001, message: 'mock: not found', data: null }));
 }

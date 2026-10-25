@@ -14,9 +14,10 @@ export function compactEvidence(list) {
   return list.filter(e => e.value != null && e.value !== '').map(e => ({ id: e.id, kind: evidenceKinds(e).join('/'), timing: evidenceTiming(e), label: e.label, value: e.display ?? e.value, as_of: e.as_of || null }));
 }
 
-const EVIDENCE_GUIDE = '证据字段：kind 为证据类型（momentum 走势、volatility 波动、position 位置、volume 量能、benchmark 基准、execution 成交、outcome 结果、holding 持有、event 事件、plan 用户当时记录、rule 规则检查结果）；timing 为时序（pre 决策前已知、at_decision 决策时点已知、partial 当日部分可知、uncertain 同日先后不确定、post 决策后产生）。';
-const TOPIC_GUIDE = '每条核心结论必须填 topic，并只引用与该主题匹配的证据：走势→momentum/position；波动→volatility；量能→volume；位置→position；相对基准→benchmark 加 momentum 或 outcome；成交价位→execution；事件信息→event；计划与纪律、理由完整性→plan/rule，且必须填 assert。';
+const EVIDENCE_GUIDE = '证据字段：kind 为证据类型（momentum 走势、volatility 波动、position 位置、volume 量能、benchmark 基准、execution 成交、outcome 结果、holding 持有、event 事件、plan 用户当时记录、rule 规则检查结果、sector 第二比较基准（行业或概念指数）走势、sector_meta 第二比较基准的名称类型与关系说明）；timing 为时序（pre 决策前已知、at_decision 决策时点已知、partial 当日部分可知、uncertain 同日先后不确定、post 决策后产生）。';
+const TOPIC_GUIDE = '每条核心结论必须填 topic，并只引用与该主题匹配的证据：走势→momentum/position；波动→volatility；量能→volume；位置→position；相对基准→benchmark 或 sector，再加 momentum 或 outcome；成交价位→execution；事件信息→event；计划与纪律、理由完整性→plan/rule，且必须填 assert。';
 const ASSERT_GUIDE = 'assert 用于可直接核对的结论：{"field":"reason|hypotheses|exit_plan","state":"filled|missing"} 或 {"rule":"规则id","status":"triggered|clear|watch|insufficient"}，规则 id 取自 rule 类证据 id 的末段。';
+const SECTOR_GUIDE = '第二比较基准（如有）的名称、类型和与股票的关系以 sector_meta 证据为准：只有“行业指数且该股为当前成分股”才能称为所属行业；概念指数只能称为相关概念指数；用户指定的只能称为比较基准。成分关系只按当前成分判断，历史成分未核实。相对任何指数的收益差异只说明表现不同，不能证明原因。';
 const SUPPORT_GUIDE = 'support 只能填 full 或 partial：证据只覆盖结论一部分时填 partial。数值类结论要原样写出所引用证据的数值。最终是否“结构化校验通过”由系统判定，不由你决定。';
 
 export function buildExAntePrompt(pack) {
@@ -30,7 +31,7 @@ export function buildExAntePrompt(pack) {
     '4. 数字只能来自证据，原样引用，不要自行计算新数字。',
     '5. 只输出 JSON，中文，简洁。',
     '6. timing 为 partial 或 uncertain 的证据只能作为辅助，不能单独支撑事前结论。',
-    EVIDENCE_GUIDE, TOPIC_GUIDE, ASSERT_GUIDE, SUPPORT_GUIDE,
+    EVIDENCE_GUIDE, TOPIC_GUIDE, ASSERT_GUIDE, SECTOR_GUIDE, SUPPORT_GUIDE,
   ].join('\n');
   const user = {
     task: '从决策当时的视角评估这笔交易的理由',
@@ -58,7 +59,8 @@ export function buildExPostPrompt(pack, exAnte) {
     '5. 数字只能来自证据，原样引用。只输出 JSON，中文，简洁。',
     '6. 假设检验要填 hypothesis_type；判“成立/不成立”必须引用 timing=post 的证据；现有证据不含财务、经营、行业或板块数据，这类假设应判“无法判断”。',
     '7. 归因只引用与该 factor 匹配的证据：市场环境需 benchmark；个股事件、行业或主题需 event；买卖时点需 momentum/position/volume/execution/outcome；执行纪律需 plan/rule/holding，能核对的要填 assert。',
-    EVIDENCE_GUIDE, ASSERT_GUIDE, SUPPORT_GUIDE,
+    '8. 行业或板块类假设可以引用 timing=post 的 sector 证据检验；没有 sector 证据时判“无法判断”。行业或主题归因即使引用了 sector 证据，也只能说明相对表现，不能写成因果结论。',
+    EVIDENCE_GUIDE, ASSERT_GUIDE, SECTOR_GUIDE, SUPPORT_GUIDE,
   ].join('\n');
   const user = {
     task: '检验假设、归因、提炼经验',
@@ -211,6 +213,10 @@ export function ruleBasedReview(pack) {
   else exAnte.reason_assessment.push({ text: '没有填写当时理由，无法评估决策依据。', type: 'fact', topic: '理由完整性', assert: { field: 'reason', state: 'missing' }, refs: [id('rec_reason')].filter(exists) });
   if (has('pre_ret_20') && has('bench_pre_ret_20')) exAnte.reason_assessment.push({ text: `决策前20个交易日该股涨跌幅为 ${pct(m.pre_ret_20)}，同期基准 ${pct(m.bench_pre_ret_20)}。`, type: 'fact', topic: '相对基准', refs: [id('pre_ret_20'), id('bench_pre_ret_20')] });
   else if (has('pre_ret_20')) exAnte.reason_assessment.push({ text: `决策前20个交易日该股涨跌幅为 ${pct(m.pre_ret_20)}（基准数据缺失）。`, type: 'fact', topic: '走势', refs: [id('pre_ret_20')] });
+  if (has('pre_ret_20') && has('sector_pre_ret_20')) {
+    const info = pack.evidence.find(e => e.id === id('sector_info'));
+    exAnte.reason_assessment.push({ text: `决策前20个交易日该股涨跌幅为 ${pct(m.pre_ret_20)}，第二比较基准（${info ? info.display : '比较指数'}）同期 ${pct(m.sector_pre_ret_20)}。`, type: 'fact', topic: '相对基准', refs: [id('pre_ret_20'), id('sector_pre_ret_20')] });
+  }
   if (t.hypotheses) t.hypotheses.split(/[；;\n]/).filter(Boolean).forEach(h => exAnte.hypotheses.push({ hypothesis: h.trim(), hypothesis_type: '其他', how_to_check: '对照交易后的价格与事件证据' }));
   for (const b of pack.biases || []) if (b.status === 'triggered' && b.phase !== 'ex_post') exAnte.visible_risks.push({ text: `${b.name}：${b.detail}`, type: 'fact', topic: ['chase', 'panic_sell'].includes(b.id) ? '走势' : '计划与纪律', assert: { rule: b.id, status: 'triggered' }, refs: [...(b.evidence || []), id(`rule-${b.id}`)].filter(exists) });
 
@@ -218,6 +224,9 @@ export function ruleBasedReview(pack) {
   exAnte.hypotheses.forEach(h => exPost.hypothesis_check.push({ hypothesis: h.hypothesis, hypothesis_type: h.hypothesis_type, verdict: '无法判断', text: '规则引擎无法自动判断文字假设，请结合事后证据人工确认', refs: [] }));
   if (has('post_excess_20')) {
     exPost.attribution.push({ factor: '市场环境', text: `交易后20个交易日个股涨跌 ${pct(m.post_ret_20)}，相对基准超额 ${pct(m.post_excess_20)}。`, confidence: '中', refs: [id('post_excess_20'), id('post_ret_20')] });
+  }
+  if (has('post_excess_sector_20')) {
+    exPost.attribution.push({ factor: '行业或主题', text: `交易后20个交易日相对第二比较基准的差异为 ${pct(m.post_excess_sector_20)}。这只说明表现差异，不能说明原因。`, confidence: '低', refs: [id('post_excess_sector_20'), id('sector_info')].filter(exists) });
   }
   if (pack.round_trip) {
     const rp = `E-rt-${pack.round_trip.buy_id}-${pack.round_trip.sell_id}`;

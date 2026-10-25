@@ -2,6 +2,7 @@
 // 每一次调用都写入 callLog，供“数据状态”面板展示与追溯。
 import { normalizeBars, normalizeEvents } from './core/context.js';
 import { addDays, dateToMs, todayShanghai, parseUpstreamTime, msToDate } from './core/dates.js';
+import { resolveSector, sectorCodesByStock } from './core/sector.js';
 
 export const BENCHMARK = { thscode: '000300.SH', name: '沪深300' };
 
@@ -133,11 +134,11 @@ export async function fetchBars(thscode, startDate, endDate, adjust) {
   return { bars, meta: r.meta };
 }
 
-export async function fetchIndexBars(thscode, startDate, endDate) {
+export async function fetchIndexBars(thscode, startDate, endDate, kind = 'bench') {
   const start = dateToMs(startDate), end = dateToMs(endDate);
   const path = 'a-share-index/prices/historical';
   const r = await getData({
-    path, params: { thscode, interval: '1d', start, end }, kind: 'bench', label: `${thscode} 指数日K`,
+    path, params: { thscode, interval: '1d', start, end }, kind, label: `${thscode} 指数日K`,
     snapshotKey: snapKey(path, thscode), snapshotPick: e => sliceItems(e, start, end),
   });
   const bars = r.ok ? normalizeBars(r.data?.item) : [];
@@ -178,12 +179,41 @@ export async function fetchEvents(thscode, startDate, endDate) {
   return { events, meta: { ok, mode: metas.find(m => m.ok)?.mode || 'failed', message: ok ? (metas.every(m => m.ok) ? 'success' : '部分区间失败') : metas[0]?.message, was_truncated: truncated, partial: ok && !metas.every(m => m.ok) } };
 }
 
+// ---------------- 第二比较基准（行业 / 概念指数） ----------------
+const catalogCache = {};
+/** 同花顺指数目录：tag=industry（行业）或 cn_concept（概念）；同一会话缓存 */
+export async function fetchThsCatalog(tag) {
+  if (catalogCache[tag]?.ok) return catalogCache[tag];
+  const path = 'a-share-index/catalog/ths-index-list';
+  const r = await getData({ path, params: { tag }, kind: 'sector', label: `同花顺${tag === 'industry' ? '行业' : '概念'}指数目录`, snapshotKey: snapKey(path, tag) });
+  const out = { ok: r.ok && Array.isArray(r.data?.item), items: r.data?.item || [], meta: r.meta };
+  r.meta.count = out.items.length;
+  catalogCache[tag] = out;
+  return out;
+}
+/** 指数当前成分股（扶摇只提供当前，不提供历史） */
+export async function fetchConstituents(indexCode) {
+  const path = 'a-share-index/constituents/ths-stock-list';
+  const r = await getData({ path, params: { thscode: indexCode }, kind: 'sector', label: `${indexCode} 当前成分股`, snapshotKey: snapKey(path, indexCode) });
+  const out = { ok: r.ok && Array.isArray(r.data?.item), items: r.data?.item || [], meta: r.meta };
+  r.meta.count = out.items.length;
+  return out;
+}
+/** 校验并解析用户填写的比较指数；任何一步失败都只影响第二基准 */
+export async function resolveSectorBenchmark(code, stockCode) {
+  const [industry, cn_concept] = [await fetchThsCatalog('industry'), await fetchThsCatalog('cn_concept')];
+  const cons = await fetchConstituents(code);
+  return resolveSector(code, stockCode, { industry, cn_concept }, cons);
+}
+
 /** 为一组交易准备全部市场数据 */
 export async function loadMarketForTrades(trades, onProgress = () => {}) {
   const today = todayShanghai();
   const codes = [...new Set(trades.map(t => t.thscode))];
   const dates = trades.map(t => t.date).sort();
   const result = { byCode: {}, bench: null };
+  const { map: sectorMap, warnings: sectorWarnings } = sectorCodesByStock(trades);
+  result.sectorWarnings = sectorWarnings;
   let step = 0;
   const total = codes.length * 3 + 1;
   for (const code of codes) {
@@ -199,6 +229,20 @@ export async function loadMarketForTrades(trades, onProgress = () => {}) {
     const evEnd = addDays(ds[ds.length - 1], 90) > today ? today : addDays(ds[ds.length - 1], 90);
     const ev = await fetchEvents(code, addDays(ds[0], -60), evEnd);
     result.byCode[code] = { thscode: code, adj: adj.bars, adjMeta: adj.meta, raw: raw.bars, rawMeta: raw.meta, events: ev.events, eventsMeta: ev.meta };
+    // 第二比较基准：失败只记录提示，不影响主链路
+    const sCode = sectorMap[code];
+    if (sCode) {
+      try {
+        onProgress(step, total, `${code} 比较指数 ${sCode}`);
+        const sec = await resolveSectorBenchmark(sCode, code);
+        if (sec.valid) {
+          const sb = await fetchIndexBars(sCode, start, end, 'sector');
+          result.byCode[code].sector = { ...sec, bars: sb.bars, meta: sb.meta };
+        } else result.byCode[code].sectorError = sec.error;
+      } catch (e) {
+        result.byCode[code].sectorError = `比较指数 ${sCode} 处理失败：${e.message}；沪深300 比较不受影响`;
+      }
+    }
   }
   onProgress(++step, total, `基准 ${BENCHMARK.name}`);
   const bStart = addDays(dates[0], -120);

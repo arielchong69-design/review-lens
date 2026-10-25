@@ -7,9 +7,11 @@ export const ALLOWED_PATHS = new Set([
   'meta/tickers/search',
   'news/anomaly/analysis',
   'a-share/calendar/trading-days',
+  'a-share-index/catalog/ths-index-list',      // 同花顺指数目录（按 industry / cn_concept 区分类型）
+  'a-share-index/constituents/ths-stock-list', // 指数当前成分股（只有当前，没有历史）
 ]);
 
-const ALLOWED_PARAMS = new Set(['thscode', 'interval', 'start', 'end', 'adjust', 'q', 'asset_type', 'limit', 'begin_date', 'end_date']);
+const ALLOWED_PARAMS = new Set(['thscode', 'interval', 'start', 'end', 'adjust', 'q', 'asset_type', 'limit', 'begin_date', 'end_date', 'tag']);
 
 /**
  * @returns 统一结构 { ok, code, message, request_id, data, fetched_at, latency_ms, upstream }

@@ -21,6 +21,9 @@ export function evidenceKinds(e) {
   if (Array.isArray(e?.kinds) && e.kinds.length) return e.kinds;
   const id = String(e?.id || '');
   if (/-ev-/.test(id)) return ['event'];
+  if (/-sector_info$/.test(id)) return ['sector_meta'];
+  if (/-(post_)?excess_sector(_\d+)?$/.test(id)) return ['outcome', 'sector'];
+  if (/-sector(_pre_ret_\d+|_day_ret|_post_ret_\d+)?$/.test(id)) return ['sector'];
   if (/-rec_(reason|hypotheses|exit_plan)$/.test(id)) return ['plan'];
   if (/-rule-[a-z_]+$/.test(id)) return ['rule'];
   if (/^E-rt-/.test(id)) {
@@ -61,11 +64,12 @@ export const TIMING_LABEL = { pre: '决策前已知', at_decision: '决策时点
 // allow：可引用的类型；requireAll：必须同时出现的类型；requireAny：至少出现其一；
 // anchor：是否要求数值锚定；assert：是否要求结构化断言；cap：该主题能达到的最高标签（受数据覆盖限制）
 export const TOPIC_RULES = {
-  走势: { allow: ['momentum', 'position', 'volume', 'benchmark'], requireAny: ['momentum', 'position'], anchor: true },
+  走势: { allow: ['momentum', 'position', 'volume', 'benchmark', 'sector'], requireAny: ['momentum', 'position'], anchor: true },
   波动: { allow: ['volatility', 'momentum'], requireAny: ['volatility'], anchor: true },
   量能: { allow: ['volume', 'momentum'], requireAny: ['volume'], anchor: true },
   位置: { allow: ['position', 'momentum'], requireAny: ['position'], anchor: true },
-  相对基准: { allow: ['benchmark', 'momentum', 'outcome'], requireAll: ['benchmark'], requireAny: ['momentum', 'outcome'], anchor: true },
+  // 比较对象可以是沪深300，也可以是第二比较基准（行业 / 概念指数）
+  相对基准: { allow: ['benchmark', 'sector', 'momentum', 'outcome', 'sector_meta'], requireGroups: [['benchmark', 'sector'], ['momentum', 'outcome']], anchor: true },
   成交价位: { allow: ['execution'], requireAny: ['execution'], anchor: true },
   事件信息: { allow: ['event'], requireAny: ['event'], anchor: false },
   计划与纪律: { allow: ['plan', 'rule', 'holding', 'outcome'], assert: true, anchor: false },
@@ -74,9 +78,10 @@ export const TOPIC_RULES = {
 
 export const FACTOR_RULES = {
   市场环境: { allow: ['benchmark', 'outcome', 'momentum'], requireAll: ['benchmark'], anchor: true },
-  行业或主题: { allow: ['event', 'benchmark'], requireAny: ['event'], anchor: false, cap: 'limited', capReason: '现有数据不含行业或板块指数，行业归因最多为“证据有限”' },
+  // 归因是因果判断：相对行业/概念指数的表现差异只能说明“表现不同”，不能证明原因，因此最高“证据有限”
+  行业或主题: { allow: ['event', 'benchmark', 'sector', 'outcome', 'sector_meta'], requireAny: ['event', 'sector'], anchor: false, cap: 'limited', capReason: '相对行业/概念指数的表现差异只能说明表现不同，不能证明行业或主题是原因；行业归因最高为“证据有限”', capReasonNoSector: '没有行业或概念比较指数，行业归因最多为“证据有限”' },
   个股事件: { allow: ['event', 'outcome'], requireAny: ['event'], anchor: false },
-  买卖时点: { allow: ['momentum', 'position', 'volume', 'volatility', 'execution', 'outcome', 'benchmark'], requireAny: ['momentum', 'position', 'volume', 'execution', 'outcome'], anchor: true },
+  买卖时点: { allow: ['momentum', 'position', 'volume', 'volatility', 'execution', 'outcome', 'benchmark', 'sector'], requireAny: ['momentum', 'position', 'volume', 'execution', 'outcome'], anchor: true },
   执行纪律: { allow: ['plan', 'rule', 'holding', 'outcome'], assertOrAnchor: true },
   不确定性: { allow: null, exempt: true },
 };
@@ -85,7 +90,8 @@ export const HYPOTHESIS_RULES = {
   价格或相对表现: { allow: ['outcome', 'benchmark'], requireAny: ['outcome'], needPost: true, anchor: true },
   事件或消息: { allow: ['event'], requireAny: ['event'], needPost: true, anchor: false },
   基本面或经营: { unsupported: '现有证据库不含财务或经营数据，无法检验该类假设' },
-  行业或板块: { unsupported: '现有证据库不含行业或板块指数，无法检验该类假设' },
+  // 有第二比较基准时可以检验；用户指定且未确认成分关系的基准最高“证据有限”
+  行业或板块: { allow: ['sector', 'outcome', 'sector_meta'], requireAny: ['sector'], needPost: true, anchor: true, needSector: true, unsupportedNoSector: '未设置行业或概念比较指数（或获取失败），无法检验该类假设' },
   其他: { unsupported: '假设类型不明确，无法用现有证据检验' },
 };
 
@@ -159,6 +165,11 @@ export function evaluateClaim(section, key, item, byId, evidence, text) {
   if (a.ok) notes.push(`结构化断言已核对：${describeAssert(item.assert)}（${a.reason}）；结论中的其余解读未经验证`);
 
   if (rule?.exempt) return { support: null, kept: refs, irrelevant, notes, contradicted: null, rule };
+  const sectorMeta = evidence.find(e => evidenceKinds(e).includes('sector_meta'));
+  const hasSectorSeries = evidence.some(e => evidenceKinds(e).includes('sector') && e.value != null);
+  if (rule?.needSector && !hasSectorSeries) {
+    return { support: SUPPORT.UNDETERMINED, kept: refs, irrelevant, notes: [rule.unsupportedNoSector], contradicted: null, rule };
+  }
   if (rule?.unsupported) {
     return { support: SUPPORT.UNDETERMINED, kept: refs, irrelevant, notes: [rule.unsupported], contradicted: null, rule };
   }
@@ -199,6 +210,7 @@ export function evaluateClaim(section, key, item, byId, evidence, text) {
   if (!supporting.length && !(rule.assert || rule.assertOrAnchor) ) { support = SUPPORT.LIMITED; notes.push('没有与主题相关且时序适用的证据'); }
   if (rule.requireAll && !rule.requireAll.every(k => have.has(k))) { support = SUPPORT.LIMITED; notes.push(`主题“${topicName}”需要 ${rule.requireAll.join('、')} 类证据`); }
   if (rule.requireAny && !rule.requireAny.some(k => have.has(k))) { support = SUPPORT.LIMITED; notes.push(`主题“${topicName}”需要 ${rule.requireAny.join(' 或 ')} 类证据`); }
+  for (const g of rule.requireGroups || []) if (!g.some(k => have.has(k))) { support = SUPPORT.LIMITED; notes.push(`主题“${topicName}”需要 ${g.join(' 或 ')} 类证据`); }
   if (rule.assert && a.ok !== true) { support = SUPPORT.LIMITED; notes.push('计划与纪律类结论需要可核对的结构化断言（如退出计划是否填写、规则是否触发）'); }
   if (rule.assertOrAnchor && a.ok !== true && !anchored(text, supporting.map(id => byId.get(id)))) { support = SUPPORT.LIMITED; notes.push('既没有可核对的结构化断言，也没有引用到证据中的数值'); }
   if (rule.anchor && support === SUPPORT.PASS && !anchored(text, supporting.map(id => byId.get(id)))) {
@@ -207,7 +219,11 @@ export function evaluateClaim(section, key, item, byId, evidence, text) {
       ? '结论依据的数值来自当日部分可知或时序不确定的证据'
       : '结论中没有出现所引用证据的数值，无法确认结论来自这些证据（可能是主题标注有误）');
   }
-  if (rule.cap === 'limited' && support === SUPPORT.PASS) { support = SUPPORT.LIMITED; notes.push(rule.capReason); }
+  if (rule.cap === 'limited' && support === SUPPORT.PASS) { support = SUPPORT.LIMITED; notes.push(hasSectorSeries || !rule.capReasonNoSector ? rule.capReason : rule.capReasonNoSector); }
+  // 引用了用户指定、未确认成分关系的比较指数：不能作为“该股所属板块”的检验依据
+  if (key === 'hypothesis_check' && support === SUPPORT.PASS && sectorMeta?.sector_role === 'user_specified' && have.has('sector')) {
+    support = SUPPORT.LIMITED; notes.push('比较指数为用户指定，未确认该股票属于此指数，不能代表该股所属板块');
+  }
   // 复合结论：被移除的主题外引用，其数值确实出现在结论里 → 结论有一部分内容没有通过主题校验，不能整体通过
   const usedOffTopic = irrelevant.filter(x => !/没有取到数值/.test(x.reason) && byId.get(x.id) && anchored(text, [byId.get(x.id)]));
   if (usedOffTopic.length && support === SUPPORT.PASS) {
@@ -216,5 +232,10 @@ export function evaluateClaim(section, key, item, byId, evidence, text) {
   }
   // AI 自评只能降级，不能升级
   if (item.support === 'partial' && support === SUPPORT.PASS) { support = SUPPORT.LIMITED; notes.push('AI 自评为“部分支撑”'); }
+  // 称谓核对：只有“行业指数 + 当前成分股”才能称为所属行业
+  if (sectorMeta && /所属行业/.test(text) && sectorMeta.sector_role !== 'industry_member' && support === SUPPORT.PASS) {
+    support = SUPPORT.LIMITED;
+    notes.push(`结论把比较指数称为“所属行业”，但核实结果为：${sectorMeta.display}`);
+  }
   return { support, kept, irrelevant, notes, contradicted: null, rule };
 }

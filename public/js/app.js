@@ -10,6 +10,7 @@ import { lessonsToChecklist, mergeChecklist, evaluateChecklist, similarHistory }
 import { addDays, todayShanghai } from './core/dates.js';
 import { state as ds, resetLog, loadMarketForTrades, callReview, health, searchTicker, fetchBars, fetchIndexBars, fetchEvents, BENCHMARK, exportSnapshot } from './datasource.js';
 import { renderChart, escapeHtml as h } from './chart.js';
+import { HISTORY_CAVEAT } from './core/sector.js';
 
 const $ = sel => document.querySelector(sel);
 const app = { trades: [], result: null, market: null, selected: null, stock: null, reviews: {}, checklist: [], evidenceIndex: new Map(), health: null };
@@ -47,13 +48,13 @@ function setTrades(list, msgs = { errors: [], warnings: [] }) {
 function renderTradeTable() {
   const t = $('#tradeTable');
   if (!app.trades.length) { t.innerHTML = '<tr><td class="muted">还没有交易记录。可以载入示例、上传 CSV，或手动添加。</td></tr>'; return; }
-  t.innerHTML = `<thead><tr><th>日期</th><th>代码</th><th>名称</th><th>方向</th><th class="num">成交价</th><th class="num">数量</th><th>当时理由</th><th>关键假设</th><th>退出计划</th><th>信心</th><th></th></tr></thead><tbody>${
+  t.innerHTML = `<thead><tr><th>日期</th><th>代码</th><th>名称</th><th>方向</th><th class="num">成交价</th><th class="num">数量</th><th>当时理由</th><th>关键假设</th><th>退出计划</th><th>信心</th><th>比较指数</th><th></th></tr></thead><tbody>${
     app.trades.map(x => `<tr>
       <td>${x.date}${x.time ? `<div class="small muted">${x.time}</div>` : ''}</td><td>${x.thscode}</td><td>${h(x.name)}</td>
       <td class="${x.side === 'buy' ? 'up' : 'down'}">${sideText(x.side)}</td>
       <td class="num">${x.price ?? '<span class="muted small">收盘价代替</span>'}</td><td class="num">${x.qty}</td>
       <td class="reason-cell">${h(x.reason) || '<span class="muted">（未填）</span>'}</td><td class="reason-cell small">${h(x.hypotheses)}</td><td class="small">${h(x.exit_plan)}</td>
-      <td>${x.confidence ?? ''}</td><td><button class="btn ghost danger small" data-del="${x.id}">删除</button></td></tr>`).join('')
+      <td>${x.confidence ?? ''}</td><td class="small">${h(x.sector_code || '')}</td><td><button class="btn ghost danger small" data-del="${x.id}">删除</button></td></tr>`).join('')
   }</tbody>`;
   t.querySelectorAll('[data-del]').forEach(b => b.onclick = () => setTrades(app.trades.filter(x => x.id !== b.dataset.del)));
 }
@@ -79,6 +80,7 @@ async function runAnalysis() {
   try {
     app.market = await loadMarketForTrades(app.trades, (i, n, label) => { prog.innerHTML = `<span class="spinner"></span> 正在获取数据 ${i}/${n}：${h(label)}`; });
     app.result = analyze(app.trades, app.market);
+    if (app.market.sectorWarnings?.length) $('#importMsgs').innerHTML = msgBox('warn', '比较指数提示：', app.market.sectorWarnings);
     indexEvidence();
     const failed = ds.callLog.filter(c => !c.ok).length, snap = ds.callLog.filter(c => c.mode === 'snapshot').length;
     prog.innerHTML = `完成：${ds.callLog.length} 次数据调用，${snap ? `${snap} 次使用离线快照，` : ''}${failed ? `<span class="down">${failed} 次失败</span>（详见“数据状态”）` : '全部成功'}`;
@@ -111,7 +113,7 @@ function renderTimeline() {
   const ctx = r.contexts.find(c => c.trade.id === app.selected);
   const stockTrades = r.contexts.filter(c => c.trade.thscode === app.stock);
   renderChart($('#chart'), {
-    bars: md?.adj?.length ? md.adj : md?.raw, bench: app.market.bench?.bars,
+    bars: md?.adj?.length ? md.adj : md?.raw, bench: app.market.bench?.bars, sector: md?.sector?.bars,
     trades: stockTrades.map(c => ({ id: c.trade.id, date: c.trade.aligned_date || c.trade.date, side: c.trade.side, label: c.trade.reason, selected: c.trade.id === app.selected })),
     events: (md?.events || []).filter(e => e.date).map(e => ({ date: e.date, label: `${e.tag}：${e.content.slice(0, 80)}` })),
     cutoff: ctx?.trade.aligned_date || null,
@@ -139,6 +141,13 @@ function renderCutoff(ctx) {
   if (!ctx) { $('#phaseCols').innerHTML = ''; $('#checks').innerHTML = ''; return; }
   const t = ctx.trade;
   $('#cutoffTitle').textContent = `信息截止线：${t.aligned_date || t.date}${t.time ? ' ' + t.time : ''} ${sideText(t.side)} ${t.name || t.thscode}`;
+  const md = app.market.byCode[t.thscode];
+  const sec = md?.sector;
+  const b = app.market.bench;
+  $('#benchCard').innerHTML = `<div><div class="t">基准一 · 宽基</div><div class="n">${h(b?.name || '沪深300')}（${h(b?.thscode || '000300.SH')}）</div><div class="small muted">${b?.bars?.length ? '用于超额收益与“市场环境”比较' : '行情获取失败，相关比较无法给出'}</div></div>`
+    + (sec?.valid
+      ? `<div><div class="t">基准二 · ${h(sec.typeLabel)}</div><div class="n">${h(sec.name)}（${h(sec.thscode)}）</div><div class="small">${h(sec.roleLabel)}</div><div class="small muted">${h(sec.notes.join('；'))}${sec.bars?.length ? '' : '；行情获取失败，相关比较无法给出'}</div></div>`
+      : `<div><div class="t">基准二 · 行业或概念指数</div><div class="n">${md?.sectorError ? '已填写但未使用' : '未设置'}</div><div class="small muted">${h(md?.sectorError || '可在交易记录中为该股票填写“比较指数代码”（同花顺行业或概念指数）')}</div></div>`);
   const lv = { error: 'error', warn: 'warn', info: 'info' };
   $('#checks').innerHTML = ctx.checks.map(c => `<div class="msg ${lv[c.level]}">${c.level === 'error' ? '数据冲突/缺失：' : c.level === 'warn' ? '注意：' : ''}${h(c.msg)}</div>`).join('');
   const col = (phase, title, sub) => {
@@ -200,11 +209,11 @@ function renderReport() {
     ['触发的偏差', s.triggered, s.data_errors ? `<span class="down">${s.data_errors} 处数据冲突</span>` : '规则推断'],
   ].map(([k, v, sub]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join('');
 
-  $('#rtTable').innerHTML = r.roundTrips.length ? `<thead><tr><th>股票</th><th>买入</th><th>卖出</th><th class="num">持有天数</th><th class="num">收益</th><th class="num">基准同期</th><th class="num">超额</th><th class="num">卖出后20日</th><th>过程 × 结果</th></tr></thead><tbody>${
+  $('#rtTable').innerHTML = r.roundTrips.length ? `<thead><tr><th>股票</th><th>买入</th><th>卖出</th><th class="num">持有天数</th><th class="num">收益</th><th class="num">基准同期</th><th class="num">超额</th><th class="num">相对比较指数</th><th class="num">卖出后20日</th><th>过程 × 结果</th></tr></thead><tbody>${
     r.roundTrips.map(rt => `<tr class="clickable" data-id="${rt.sell_id}">
       <td>${h(rt.name || rt.thscode)}</td><td>${rt.buy_date}<div class="small muted">@ ${rt.buy_price}</div></td><td>${rt.sell_date}<div class="small muted">@ ${rt.sell_price} × ${rt.qty}</div></td>
       <td class="num">${rt.holding_days ?? '—'}</td><td class="num ${cls(rt.pnl_pct)}">${pct(rt.pnl_pct)}<div class="small">${fmtMoney(rt.pnl)}</div></td>
-      <td class="num ${cls(rt.bench_ret)}">${pct(rt.bench_ret)}</td><td class="num ${cls(rt.excess)}">${pct(rt.excess)}</td>
+      <td class="num ${cls(rt.bench_ret)}">${pct(rt.bench_ret)}</td><td class="num ${cls(rt.excess)}">${pct(rt.excess)}</td><td class="num ${cls(rt.excess_sector)}" title="${h(app.market.byCode[rt.thscode]?.sector?.valid ? app.market.byCode[rt.thscode].sector.name + '（' + app.market.byCode[rt.thscode].sector.typeLabel + '）；只说明表现差异，不说明原因' : '未设置第二比较基准')}">${pct(rt.excess_sector)}${app.market.byCode[rt.thscode]?.sector?.valid ? `<div class="small muted">${h(app.market.byCode[rt.thscode].sector.name)}</div>` : ''}</td>
       <td class="num ${cls(rt.post_sell_ret_20)}" title="事后信息，仅供参考">${pct(rt.post_sell_ret_20)}</td>
       <td><span class="quad ${quadCls(rt.process.quadrant)}" title="${h(rt.process.reasons.join('\n'))}">${rt.process.quadrant}</span><div class="small muted">过程分 ${rt.process.score}/5</div></td></tr>`).join('')
   }</tbody>` : '<tr><td class="muted">还没有完整的买入→卖出回合。</td></tr>';
@@ -260,7 +269,7 @@ const supportTag = x => {
   if (!x || !x.support) return '';
   // 已改写为“（证据有限）/（无法判断）……”或假设已判“无法判断”的，不重复显示标签
   if (typeof x.text === 'string' && /^（(证据有限|无法判断)）/.test(x.text)) return '';
-  if (x.verdict === '无法判断' && x.support === 'undetermined') return '';
+  if (x.verdict === '无法判断') return '';
   const cls = x.support === 'pass' ? 'fact' : x.support === 'limited' ? 'inference' : 'unc';
   const tip = [SUPPORT_NOTE, ...(x.support_notes || [])].join('\n');
   return `<span class="tag ${cls}" title="${h(tip)}">${SUPPORT_LABEL[x.support]}</span>`;
