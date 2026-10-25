@@ -3,7 +3,6 @@
 投资者复盘时通常只记得盈亏。复盘镜把**交易记录、当时理由、市场数据和事件**对齐到同一条时间线上，在每个决策点画一条**信息截止线**，把“当时能知道的”和“事后才知道的”分开，再用规则和 AI 做结构化复盘，最后把结论沉淀成**下一次决策前自动检查的清单**。
 
 - 在线地址：https://review-lens-24x.pages.dev
-- 演示视频：`<可选>`
 
 ---
 
@@ -168,7 +167,7 @@
 
 ```bash
 # 本地运行（需要 Node 18+）
-cp .dev.vars.example .dev.vars    # 填入 Key
+# 在项目根目录新建 .dev.vars，按下方“环境变量”表填入 Key（该文件不要提交）
 npm run dev                       # http://localhost:8788
 node scripts/dev-server.mjs --mock  # 不需要 Key，用合成数据离线开发（仅开发用）
 
