@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>复盘镜 · 投资决策复盘</title>
+<meta name="description" content="把交易记录、当时理由、行情与事件对齐到时间线，区分事前可知与事后信息，沉淀可复用的决策清单。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f4e8c'/%3E%3Cpath d='M7 22l6-6 4 3 8-9' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <div>
+      <div class="brand-name">复盘镜</div>
+      <div class="brand-sub">还原当时的信息与假设，而不只是盈亏</div>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="dataBadge" class="badge">数据：检测中…</span>
+    <span id="aiBadge" class="badge">AI：检测中…</span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-tab="trades" role="tab">① 交易记录</button>
+  <button class="tab" data-tab="timeline" role="tab">② 时间线</button>
+  <button class="tab" data-tab="report" role="tab">③ 复盘报告</button>
+  <button class="tab" data-tab="checklist" role="tab">④ 经验清单</button>
+  <button class="tab" data-tab="precheck" role="tab">⑤ 决策前检查</button>
+  <button class="tab" data-tab="status" role="tab">数据状态</button>
+</nav>
+
+<div class="disclaimer" id="disclaimer"></div>
+
+<main>
+  <!-- ① 交易记录 -->
+  <section class="panel active" id="tab-trades">
+    <div class="card">
+      <div class="card-head">
+        <h2>导入一组历史交易</h2>
+        <div class="actions">
+          <button class="btn" id="btnSample">载入示例交易</button>
+          <label class="btn">上传 CSV<input type="file" id="fileCsv" accept=".csv,text/csv" hidden></label>
+          <button class="btn ghost" id="btnTemplate">下载模板</button>
+          <button class="btn ghost" id="btnExport">导出当前记录</button>
+          <button class="btn ghost danger" id="btnClear">清空</button>
+        </div>
+      </div>
+      <p class="muted">示例交易是为演示构造的匿名记录：标的和日期真实存在，理由与成交价为构造内容。每笔交易尽量写下<b>当时理由</b>、<b>关键假设</b>和<b>退出计划</b>，复盘才能区分“判断对了”和“运气好”。</p>
+      <div id="importMsgs"></div>
+      <div class="table-wrap"><table class="tbl" id="tradeTable"></table></div>
+      <details class="add-form">
+        <summary>＋ 手动添加一笔交易</summary>
+        <form id="addForm" class="grid-form">
+          <label>日期<input name="date" type="date" required></label>
+          <label>时间（可选）<input name="time" type="time"></label>
+          <label>代码<input name="thscode" placeholder="600519.SH" required></label>
+          <label>名称<input name="name" placeholder="贵州茅台"></label>
+          <label>方向<select name="side"><option>买入</option><option>卖出</option></select></label>
+          <label>成交价（可空）<input name="price" type="number" step="0.001" min="0"></label>
+          <label>数量（股）<input name="qty" type="number" step="1" min="1" required></label>
+          <label>信心 1–5<input name="confidence" type="number" min="1" max="5"></label>
+          <label class="wide">当时理由<textarea name="reason" rows="2" placeholder="当时为什么这样做？"></textarea></label>
+          <label class="wide">关键假设（用“；”分隔）<input name="hypotheses" placeholder="例如：一季度业绩改善；板块热度持续"></label>
+          <label class="wide">退出计划<input name="exit_plan" placeholder="例如：止损-8%，止盈+15%"></label>
+          <div class="wide"><button class="btn primary" type="submit">添加</button></div>
+        </form>
+      </details>
+      <div class="run-row">
+        <button class="btn primary big" id="btnRun">开始复盘 →</button>
+        <span id="runProgress" class="muted"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② 时间线 -->
+  <section class="panel" id="tab-timeline">
+    <div class="empty" id="timelineEmpty">先在“交易记录”里点击“开始复盘”。</div>
+    <div id="timelineBody" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>交易与市场时间线</h2>
+          <div class="actions"><select id="stockSelect"></select></div>
+        </div>
+        <div class="legend">
+          <span><i class="dot buy"></i>买入</span><span><i class="dot sell"></i>卖出</span>
+          <span><i class="dot ev"></i>异动事件</span><span><i class="line bench"></i>基准（沪深300，按首日归一）</span>
+          <span><i class="shade"></i>选中交易之后的“事后区间”</span>
+        </div>
+        <div id="chart" class="chart"></div>
+        <p class="muted small">点击图上的买卖点或下方列表中的交易，查看该决策的信息截止线。</p>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2 id="cutoffTitle">信息截止线</h2><div class="actions"><button class="btn primary" id="btnGoReview">复盘这笔交易 →</button></div></div>
+        <div id="checks"></div>
+        <div class="three-col" id="phaseCols"></div>
+      </div>
+      <div class="card">
+        <h2>完整时间线</h2>
+        <ol class="timeline" id="timelineList"></ol>
+      </div>
+    </div>
+  </section>
+
+  <!-- ③ 复盘报告 -->
+  <section class="panel" id="tab-report">
+    <div class="empty" id="reportEmpty">先在“交易记录”里点击“开始复盘”。</div>
+    <div id="reportBody" hidden>
+      <div class="stats" id="stats"></div>
+      <div class="card">
+        <div class="card-head"><h2>回合（买入 → 卖出）一览</h2></div>
+        <div class="table-wrap"><table class="tbl" id="rtTable"></table></div>
+        <div id="portfolioBias"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>单笔交易复盘</h2>
+          <div class="actions">
+            <select id="tradeSelect"></select>
+            <button class="btn primary" id="btnReview">生成复盘</button>
+            <button class="btn ghost" id="btnReviewAll">复盘全部</button>
+          </div>
+        </div>
+        <div id="reviewOut"><p class="muted">选择一笔交易后点击“生成复盘”。AI 分两步：先只看决策当时的证据，再看事后证据。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ④ 经验清单 -->
+  <section class="panel" id="tab-checklist">
+    <div class="card">
+      <div class="card-head">
+        <h2>我的决策清单</h2>
+        <div class="actions"><button class="btn ghost" id="btnExportMd">导出 Markdown</button><button class="btn ghost danger" id="btnClearList">清空清单</button></div>
+      </div>
+      <p class="muted">复盘里的经验会沉淀到这里。带“自动检查”标签的条目，会在“决策前检查”时根据最新行情或你写下的计划自动判断是否需要提醒。清单只保存在当前浏览器。</p>
+      <ul class="checklist" id="checklistList"></ul>
+    </div>
+  </section>
+
+  <!-- ⑤ 决策前检查 -->
+  <section class="panel" id="tab-precheck">
+    <div class="card">
+      <h2>下一次决策前，先过一遍自己的清单</h2>
+      <form id="precheckForm" class="grid-form">
+        <label>代码或名称<input name="q" placeholder="例如 600519.SH 或 茅台" required list="tickerList"><datalist id="tickerList"></datalist></label>
+        <label>打算<select name="side"><option>买入</option><option>卖出</option></select></label>
+        <label class="wide">理由<textarea name="reason" rows="2" placeholder="写下你现在的理由"></textarea></label>
+        <label class="wide">退出计划<input name="exit_plan" placeholder="止损 / 止盈 / 离场条件"></label>
+        <div class="wide"><button class="btn primary" type="submit">检查</button></div>
+      </form>
+      <div id="precheckOut"></div>
+    </div>
+  </section>
+
+  <!-- 数据状态 -->
+  <section class="panel" id="tab-status">
+    <div class="card">
+      <div class="card-head"><h2>数据与服务状态</h2><div class="actions"><button class="btn ghost" id="btnSnapshot" title="把本次实时获取的扶摇原始响应导出为 snapshot.json，可用于离线兜底和复现结论">导出数据快照</button></div></div>
+      <div class="grid-form">
+        <label>数据模式
+          <select id="modeSelect">
+            <option value="auto">自动：实时优先，失败时用离线快照</option>
+            <option value="live">仅实时（失败即标记缺失）</option>
+            <option value="snapshot">仅离线快照</option>
+          </select>
+        </label>
+        <fieldset class="wide drill">
+          <legend>故障演练（用于测试降级逻辑）</legend>
+          <label><input type="checkbox" value="kline"> K线接口失败</label>
+          <label><input type="checkbox" value="events"> 事件接口失败</label>
+          <label><input type="checkbox" value="bench"> 基准指数失败</label>
+          <label><input type="checkbox" value="snapshot"> 快照也不可用</label>
+          <label><input type="checkbox" value="ai"> AI 服务失败</label>
+        </fieldset>
+      </div>
+      <p class="muted small">修改后回到“交易记录”重新点击“开始复盘”生效。</p>
+      <div id="healthBox"></div>
+      <h3>本次复盘的每一次数据调用</h3>
+      <div class="table-wrap"><table class="tbl small" id="logTable"></table></div>
+    </div>
+  </section>
+</main>
+
+<div class="drawer" id="drawer" hidden>
+  <div class="drawer-inner">
+    <button class="drawer-close" id="drawerClose" aria-label="关闭">×</button>
+    <div id="drawerBody"></div>
+  </div>
+</div>
+
+<footer class="foot">复盘镜 · 数据来源：同花顺扶摇金融数据 API · AI：DeepSeek · 不构成投资建议</footer>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
