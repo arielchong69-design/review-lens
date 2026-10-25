@@ -199,3 +199,21 @@ test('时序传递：只由“当日大涨”触发的追涨规则，其规则�
   const chase = data.visible_risks.find(x => /追涨/.test(x.text));
   assert.notEqual(chase.support, SUPPORT.PASS);
 });
+test('复合结论（线上实测发现）：主题为“位置”却同时用到波动率数值，波动率引用被移除后不能整体“通过”', () => {
+  const text = `距前60日最高价 ${disp('E-b-pre_dist_high_60')}，同时年化波动 ${disp('E-b-pre_vol_20')}，风险偏大。`;
+  const { data } = one('ex_ante', 'visible_risks', { text, type: 'fact', topic: '位置', refs: ['E-b-pre_dist_high_60', 'E-b-pre_vol_20'] });
+  const x = data.visible_risks[0];
+  assert.deepEqual(x.irrelevant_refs, ['E-b-pre_vol_20']);
+  assert.equal(x.support, SUPPORT.LIMITED);
+  assert.ok(x.support_notes.some(n => /主题之外的证据/.test(n)));
+});
+test('复合结论的对照组：被移除的主题外引用，数值并未出现在结论里 → 不影响通过', () => {
+  const { data } = one('ex_ante', 'visible_risks', { text: `距前60日最高价 ${disp('E-b-pre_dist_high_60')}。`, type: 'fact', topic: '位置', refs: ['E-b-pre_dist_high_60', 'E-b-pre_vol_20'] });
+  assert.equal(data.visible_risks[0].support, SUPPORT.PASS);
+});
+test('断言只证明结构化事实（线上实测发现）：通过的结论必须注明“其余解读未经验证”', () => {
+  const { data } = one('ex_ante', 'reason_assessment', { text: '理由属于情绪驱动，没有判断依据。', type: 'fact', topic: '理由完整性', refs: [], assert: { field: 'reason', state: 'filled' } });
+  const x = data.reason_assessment[0];
+  assert.equal(x.support, SUPPORT.PASS);
+  assert.ok(x.support_notes.some(n => /当时理由已填写/.test(n) && /其余解读未经验证/.test(n)));
+});

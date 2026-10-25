@@ -266,7 +266,8 @@ const supportTag = x => {
   return `<span class="tag ${cls}" title="${h(tip)}">${SUPPORT_LABEL[x.support]}</span>`;
 };
 const removedRefs = x => (x.irrelevant_refs?.length ? `<span class="small muted" title="${h(x.support_notes?.join('\n') || '')}">（已移除不相关引用 ${x.irrelevant_refs.length} 条）</span>` : '');
-const claimTail = x => `${refChips(x.refs)}${removedRefs(x)}${x.untraced ? '<span class="tag warn">数字未能溯源</span>' : ''}`;
+const assertNote = x => { const n = (x.support_notes || []).find(t => t.startsWith('结构化断言已核对')); return n ? `<div class="small muted">${h(n)}</div>` : ''; };
+const claimTail = x => `${refChips(x.refs)}${removedRefs(x)}${x.untraced ? '<span class="tag warn">数字未能溯源</span>' : ''}${assertNote(x)}`;
 const genLabel = rv => (rv.generator === 'ai' ? `由 ${h(rv.model || 'AI')} 生成，已通过引用与合规校验` : `规则引擎生成（AI 不可用：${h(rv.ai_error || '未知')}）`);
 
 function renderExAnte(rv) {

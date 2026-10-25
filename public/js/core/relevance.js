@@ -112,6 +112,14 @@ export function anchored(text, evs) {
  * assert 形如 { field: 'exit_plan', state: 'missing' } 或 { rule: 'chase', status: 'triggered' }。
  * 返回 { ok: true|false|null, refs: [对应证据ID], reason }；null 表示断言格式无效或找不到对应记录。
  */
+const FIELD_TEXT = { reason: '当时理由', hypotheses: '关键假设', exit_plan: '退出计划' };
+const STATUS_TEXT = { triggered: '触发', clear: '未触发', watch: '值得留意', insufficient: '数据不足' };
+export function describeAssert(a) {
+  if (a?.field) return `${FIELD_TEXT[a.field] || a.field}${a.state === 'filled' ? '已填写' : '未填写'}`;
+  if (a?.rule) return `规则 ${a.rule} ${STATUS_TEXT[a.status] || a.status}`;
+  return '';
+}
+
 export function checkAssert(assert, evidence) {
   if (!assert || typeof assert !== 'object') return { ok: null, refs: [], reason: '没有结构化断言' };
   if (assert.field) {
@@ -147,6 +155,8 @@ export function evaluateClaim(section, key, item, byId, evidence, text) {
   const a = checkAssert(item.assert, evidence);
   if (a.ok === false) return { support: SUPPORT.UNDETERMINED, kept: [], irrelevant, notes: [a.reason], contradicted: a.reason, rule };
   let refs = [...new Set([...(item.refs || []), ...(a.ok ? a.refs : [])])];
+  // 断言只核对了一个结构化事实（如“退出计划未填写”），结论中对它的解读并未被验证，必须写明
+  if (a.ok) notes.push(`结构化断言已核对：${describeAssert(item.assert)}（${a.reason}）；结论中的其余解读未经验证`);
 
   if (rule?.exempt) return { support: null, kept: refs, irrelevant, notes, contradicted: null, rule };
   if (rule?.unsupported) {
@@ -198,6 +208,12 @@ export function evaluateClaim(section, key, item, byId, evidence, text) {
       : '结论中没有出现所引用证据的数值，无法确认结论来自这些证据（可能是主题标注有误）');
   }
   if (rule.cap === 'limited' && support === SUPPORT.PASS) { support = SUPPORT.LIMITED; notes.push(rule.capReason); }
+  // 复合结论：被移除的主题外引用，其数值确实出现在结论里 → 结论有一部分内容没有通过主题校验，不能整体通过
+  const usedOffTopic = irrelevant.filter(x => !/没有取到数值/.test(x.reason) && byId.get(x.id) && anchored(text, [byId.get(x.id)]));
+  if (usedOffTopic.length && support === SUPPORT.PASS) {
+    support = SUPPORT.LIMITED;
+    notes.push(`结论还用到了主题之外的证据（${usedOffTopic.map(x => byId.get(x.id).label).join('、')}），这部分没有通过主题校验`);
+  }
   // AI 自评只能降级，不能升级
   if (item.support === 'partial' && support === SUPPORT.PASS) { support = SUPPORT.LIMITED; notes.push('AI 自评为“部分支撑”'); }
   return { support, kept, irrelevant, notes, contradicted: null, rule };
