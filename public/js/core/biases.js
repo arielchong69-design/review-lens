@@ -10,8 +10,9 @@ export const THRESHOLDS = {
   panic_bench_day: -0.02,  // 卖出当日基准跌幅 ≥ 2%
   panic_stock_day: -0.05,  // 或个股当日跌幅 ≥ 5%
   stop_tolerance: 0.02,    // 止损线被击穿超过 2 个百分点仍未离场
-  short_hold_days: 20,     // “长期”却持有不足 20 个交易日
-  long_hold_days: 60,      // “短线”却持有超过 60 个交易日
+  chase_day_ret: 0.07,     // 或买入当日涨幅 ≥ 7%（盘中可见，属于“当日部分可知”）
+  short_hold_days: 60,     // “长期”却持有不足 60 个交易日（约 3 个月）
+  long_hold_days: 30,      // “短线”却持有超过 30 个交易日
   disposition_ratio: 0.6,  // 盈利回合平均持有天数 < 亏损回合 × 0.6
 };
 
@@ -27,16 +28,18 @@ export function tradeBiases(ctx) {
 
   if (t.side === 'buy') {
     // 追涨
-    const hasData = m.pre_ret_20 != null || (m.pre_dist_high_60 != null && m.pre_vol_ratio != null);
+    const hasData = m.pre_ret_20 != null || (m.pre_dist_high_60 != null && m.pre_vol_ratio != null) || m.day_ret != null;
     const c1 = m.pre_ret_20 != null && m.pre_ret_20 >= THRESHOLDS.chase_ret20;
     const c2 = m.pre_dist_high_60 != null && m.pre_vol_ratio != null && m.pre_dist_high_60 >= THRESHOLDS.chase_near_high && m.pre_vol_ratio >= THRESHOLDS.chase_vol_ratio;
+    const c3 = m.day_ret != null && m.day_ret >= THRESHOLDS.chase_day_ret;
+    const hits = [c1 && `买前20日已涨 ${pct(m.pre_ret_20)}`, c2 && '贴近60日高点且放量', c3 && `买入当天大涨（收盘 ${pct(m.day_ret)}）`].filter(Boolean);
     out.push({
       id: 'chase', name: '追涨买入', trade_id: t.id, phase: 'ex_ante',
-      status: !hasData ? 'insufficient' : c1 || c2 ? 'triggered' : 'clear',
-      rule: `买前20日涨幅 ≥ ${pct(THRESHOLDS.chase_ret20)}，或距60日高点 ≤ 3% 且近5日量能 ≥ 60日均量 ${THRESHOLDS.chase_vol_ratio} 倍`,
-      evidence: [evRef(ctx, 'pre_ret_20'), evRef(ctx, 'pre_dist_high_60'), evRef(ctx, 'pre_vol_ratio')],
-      detail: hasData ? `买前20日 ${pct(m.pre_ret_20)}，距60日高点 ${pct(m.pre_dist_high_60)}，量比 ${m.pre_vol_ratio ?? '—'}` : '买入前历史行情不足',
-      note: '这些信息在买入时都能看到，属于事前可识别的风险信号；追涨本身不等于错误，关键看理由里是否考虑了它',
+      status: !hasData ? 'insufficient' : hits.length ? 'triggered' : 'clear',
+      rule: `满足任一：买前20日涨幅 ≥ ${pct(THRESHOLDS.chase_ret20)}；距60日高点 ≤ 3% 且近5日量能 ≥ 60日均量 ${THRESHOLDS.chase_vol_ratio} 倍；买入当日涨幅 ≥ ${pct(THRESHOLDS.chase_day_ret)}`,
+      evidence: [evRef(ctx, 'pre_ret_20'), evRef(ctx, 'pre_dist_high_60'), evRef(ctx, 'pre_vol_ratio'), evRef(ctx, 'day_ret')],
+      detail: hasData ? (hits.length ? `触发：${hits.join('；')}` : `买前20日 ${pct(m.pre_ret_20)}，距60日高点 ${pct(m.pre_dist_high_60)}，量比 ${m.pre_vol_ratio ?? '—'}，当日 ${pct(m.day_ret)}`) : '买入前历史行情不足',
+      note: c3 && !c1 && !c2 ? '当日涨幅用的是收盘数据，决策时盘中只能看到一部分，因此按“当日部分可知”处理；追涨本身不等于错误，关键看理由里是否考虑了它' : '这些信息在买入时都能看到，属于事前可识别的风险信号；追涨本身不等于错误，关键看理由里是否考虑了它',
     });
     // 退出计划缺失
     const hasPlan = !!(t.exit_plan || extractStopLossPct(t.reason) || extractStopLossPrice(t.reason) || /止盈|止损|目标|离场|退出/.test(t.reason));
@@ -103,8 +106,8 @@ export function roundTripBiases(rt, buyTrade) {
 export function portfolioBiases(roundTrips) {
   const win = roundTrips.filter(r => r.pnl_pct > 0 && r.holding_days != null);
   const loss = roundTrips.filter(r => r.pnl_pct <= 0 && r.holding_days != null);
-  if (win.length < 2 || loss.length < 1) {
-    return [{ id: 'disposition', name: '处置效应', phase: 'ex_post', status: 'insufficient', rule: '至少需要 2 个盈利回合和 1 个亏损回合', detail: `当前盈利回合 ${win.length} 个，亏损回合 ${loss.length} 个`, evidence: [] }];
+  if (win.length < 1 || loss.length < 2) {
+    return [{ id: 'disposition', name: '处置效应', phase: 'ex_post', status: 'insufficient', rule: '至少需要 1 个盈利回合和 2 个亏损回合', detail: `当前盈利回合 ${win.length} 个，亏损回合 ${loss.length} 个`, evidence: [] }];
   }
   const avg = a => a.reduce((s, r) => s + r.holding_days, 0) / a.length;
   const aw = avg(win), al = avg(loss);
@@ -131,11 +134,14 @@ export function processOutcome(rt, buyTrade, biasesForRt, buyBiases) {
   const plan = buyBiases.find(b => b.id === 'no_exit_plan');
   if (plan?.status === 'clear') { score++; reasons.push('+1 有退出计划'); } else reasons.push('0 没有退出计划');
   const broke = biasesForRt.some(b => (b.id === 'stop_breach' || b.id === 'plan_drift') && b.status === 'triggered');
-  if (!broke) { score++; reasons.push('+1 未发现违背自己计划'); } else reasons.push('0 违背了自己写下的计划');
+  if (plan?.status !== 'clear') reasons.push('0 没有计划，无从谈起遵守');
+  else if (!broke) { score++; reasons.push('+1 按自己写下的计划执行'); } else reasons.push('0 违背了自己写下的计划');
   const chase = buyBiases.find(b => b.id === 'chase');
   const acknowledged = /追高|高位|涨幅较大|已经涨|风险|仓位/.test(buyTrade?.reason || '');
   if (chase?.status !== 'triggered' || acknowledged) { score++; reasons.push(chase?.status === 'triggered' ? '+1 有追涨信号，但理由中考虑了风险' : '+1 事前无明显追涨信号'); } else reasons.push('0 有追涨信号且理由未提及');
-  const goodProcess = score >= 4;
+  // 违背自己写下的计划是一票否决项：分数再高也不算“过程好”
+  const goodProcess = score >= 4 && !broke;
+  if (broke && score >= 4) reasons.push('（违背计划，一票否决）');
   const outcomeVal = rt.excess ?? rt.pnl_pct;
   const goodOutcome = outcomeVal > 0;
   const quadrant = goodProcess && goodOutcome ? '过程好 · 结果好' : goodProcess ? '过程好 · 结果差' : goodOutcome ? '过程差 · 结果好' : '过程差 · 结果差';

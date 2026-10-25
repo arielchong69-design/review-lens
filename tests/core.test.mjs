@@ -273,3 +273,28 @@ test('被合规过滤的 AI 经验不会进入清单', () => {
   const items = lessonsToChecklist({ ex_post: { lessons: [{ text: '【已过滤：此句涉及直接买卖建议，本产品不提供】' }, { text: '买入前写下离场条件。' }] } }, [], 't1');
   assert.equal(items.length, 1);
 });
+test('追涨：买入当天大涨（当日部分可知）也会触发', () => {
+  const m = market('600000.SH', { seed: 11, drift: d => (d === '2025-03-03' ? 0.1 : 0) });
+  const r = analyze([{ id: 'b', date: '2025-03-03', thscode: '600000.SH', side: 'buy', qty: 1, price: null, reason: '看到大涨赶紧上车' }], { byCode: { '600000.SH': m }, bench: BENCH() });
+  const chase = r.biasesByTrade.b.find(x => x.id === 'chase');
+  assert.equal(chase.status, 'triggered');
+  assert.match(chase.detail, /买入当天大涨/);
+});
+test('过程分：没有退出计划时，“遵守计划”不得分', () => {
+  const m = market('600000.SH', { seed: 12 });
+  const r = analyze([
+    { id: 'b', date: '2025-03-03', thscode: '600000.SH', side: 'buy', qty: 1, price: null, reason: '有理由', hypotheses: '有假设', exit_plan: '' },
+    { id: 's', date: '2025-03-20', thscode: '600000.SH', side: 'sell', qty: 1, price: null, reason: '' },
+  ], { byCode: { '600000.SH': m }, bench: BENCH() });
+  const p = r.roundTrips[0].process;
+  assert.ok(p.reasons.some(x => x.includes('没有计划，无从谈起遵守')));
+  assert.ok(p.score <= 3);
+});
+test('过程分：违背自己写下的计划时，分数再高也不算“过程好”', () => {
+  const m = market('600000.SH', { seed: 8, drift: d => (d >= '2025-03-04' && d < '2025-03-14' ? -0.02 : 0) });
+  const r = analyze([
+    { id: 'b', date: '2025-03-03', thscode: '600000.SH', side: 'buy', qty: 1, price: null, reason: '估值低，长期持有', hypotheses: '业绩改善', exit_plan: '止损-5%' },
+    { id: 's', date: '2025-03-20', thscode: '600000.SH', side: 'sell', qty: 1, price: null, reason: '' },
+  ], { byCode: { '600000.SH': m }, bench: BENCH() });
+  assert.match(r.roundTrips[0].process.quadrant, /^过程差/);
+});

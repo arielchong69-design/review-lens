@@ -75,4 +75,10 @@ test('AI：HTTP 错误 → 返回失败而不是空结论', async () => {
   const r = await runReviewStage({ stage: 'ex_post', pack: PACK }, { DEEPSEEK_API_KEY: 'k' }, async () => new Response('', { status: 503 }));
   assert.equal(r.ok, false);
   assert.equal(r.code, 'HTTP_503');
+  assert.match(r.message, /服务繁忙/);
+});
+test('AI：余额不足（HTTP 402）给出明确的中文原因', async () => {
+  const r = await runReviewStage({ stage: 'ex_ante', pack: PACK }, { DEEPSEEK_API_KEY: 'k' }, async () => new Response('', { status: 402 }));
+  assert.equal(r.code, 'HTTP_402');
+  assert.match(r.message, /余额不足/);
 });

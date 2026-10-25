@@ -23,7 +23,10 @@ export async function runReviewStage({ stage, pack, exAnte }, env, fetchImpl = f
         messages: [{ role: 'system', content: prompt.system }, { role: 'user', content: prompt.user }],
       }),
     });
-    if (!res.ok) return { ok: false, code: `HTTP_${res.status}`, message: `DeepSeek 返回 HTTP ${res.status}`, latency_ms: Date.now() - started };
+    if (!res.ok) {
+      const why = { 400: '请求格式错误', 401: 'API Key 无效', 402: '账户余额不足', 422: '参数错误', 429: '请求过于频繁', 500: '服务内部错误', 503: '服务繁忙' }[res.status] || '未知错误';
+      return { ok: false, code: `HTTP_${res.status}`, message: `DeepSeek 返回 HTTP ${res.status}（${why}）`, latency_ms: Date.now() - started };
+    }
     const body = await res.json();
     const content = body?.choices?.[0]?.message?.content;
     const parsed = safeParseJSON(content);
